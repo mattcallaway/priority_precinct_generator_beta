@@ -67,8 +67,8 @@ def load_inputs():
         inputs['city'] = city_df
         logging.info(f"Loaded SRPREC city mapping: {len(city_df)} rows.")
     except Exception as e:
-        logging.error(f"Failed to load city mapping: {e}")
-        raise
+        logging.warning(f"Failed to load city mapping: {e}")
+        inputs['city'] = None
 
     try:
         dist_df = pd.read_csv(CONFIG["DISTRICT_ASSIGNMENTS"])
@@ -76,8 +76,8 @@ def load_inputs():
         inputs['dist'] = dist_df
         logging.info(f"Loaded district assignments: {len(dist_df)} rows.")
     except Exception as e:
-        logging.error(f"Failed to load district assignments: {e}")
-        raise
+        logging.warning(f"Failed to load district assignments: {e}")
+        inputs['dist'] = None
 
     # Validate essential columns
     required_voter_cols = ['precinctname', 'party', 'general24', 'general22']
@@ -88,6 +88,43 @@ def load_inputs():
             raise ValueError(f"Missing required column {c} in voter file.")
     
     return inputs
+
+def validate_data(inputs):
+    """
+    Computes pre-flight checks on loaded data mapping percentages
+    so the UI can warn the user before scoring runs.
+    """
+    warnings_list = []
+    
+    if inputs.get('dist') is None:
+        warnings_list.append("DISTRICT_ASSIGNMENT_MISSING")
+    
+    if inputs.get('city') is None:
+        warnings_list.append("CITY_MAPPING_MISSING")
+        
+    return warnings_list
+
+def generate_template():
+    """
+    Looks at the MPREC crosswalk and generates a template district_assignment.csv
+    populated with all known SRPRECs for manual data entry.
+    """
+    try:
+        mprec_df = pd.read_csv(CONFIG["MPREC_CROSSWALK"])
+        mprec_df = normalize_columns(mprec_df)
+        unique_srprecs = mprec_df['srprec'].dropna().unique()
+        
+        template_df = pd.DataFrame({
+            'SRPREC': unique_srprecs,
+            'assembly_district': [''] * len(unique_srprecs),
+            'supervisorial_district': [''] * len(unique_srprecs)
+        })
+        
+        out_path = os.path.join(CONFIG["OUTPUT_DIR"], 'district_assignment_template.csv')
+        template_df.to_csv(out_path, index=False)
+        return {"status": "success", "path": out_path}
+    except Exception as e:
+        return {"status": "error", "message": f"Could not generate template. Need crosswalk first: {e}"}
 
 def build_voter_flags(df):
     logging.info("Step 2: Building voter helper flags")
@@ -351,6 +388,12 @@ def run_pipeline(weights=None):
     try:
         reset_qa()
         inputs = load_inputs()
+        
+        # Validation layer
+        warnings = validate_data(inputs)
+        if warnings:
+            return {"status": "validation_error", "warnings": warnings}
+            
         voter_flags = build_voter_flags(inputs['voters'])
         
         mprec_agg = aggregate_mprec(voter_flags)
