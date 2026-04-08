@@ -2,69 +2,68 @@
 
 Welcome to the automated pipeline for the **Priority Precinct Generator**. This tool evaluates raw campaign data alongside precinct-level geographies to identify exactly where your field program can achieve tactical advantages.
 
-This project is entirely local, ensuring 100% data security. **It features a smart, highly-usable Drag-and-Drop Data Dashboard designed to ingest messy data, figure out what's missing, and help you automatically build missing logic maps via internal Geographic Information Systems (GIS) rendering.**
+This project is entirely local, ensuring 100% data security. **It features a smart, highly-usable Drag-and-Drop Data Dashboard designed to ingest messy data, automatically route missing gaps through dynamic GIS processing, and produce rigorous 12-file QA audits.**
 
 ---
 
-## 1. Prerequisites
+## 🚀 Getting Started
 
-1. **Python**: Required to run the background engine. Don't worry about being technical—just download it from [python.org](https://www.python.org/downloads/) and ensure you check "Add Python to PATH" during installation.
-2. **Your Available Data**: Download what you have from your voter database. (You *no longer* need perfectly formatted outputs prior to running the app!)
+The application no longer requires manual command-line typing. 
 
----
+1. **Ensure Python is installed:** Download from [python.org](https://www.python.org/downloads/) (Make sure to check "Add Python to PATH" during the install wizard!).
+2. **Launch the Engine:**
+   - On Windows: Double-click **`run_generator.bat`**
+   - On Mac/Linux: Double-click **`run_generator.sh`**
 
-## 2. Running the Application
-
-Forget typing terminal commands. To start the application, simply:
-
-### **If you use Windows:**
-Double-click the **`run_generator.bat`** file inside this folder.
-*(The first time you run it, it might take a minute to download the required mapping components like Geopandas. Afterwards, it will instantly launch.)*
-
-### **If you use Mac/Linux:**
-Double-click the **`run_generator.sh`** file.
-*(Or run `bash run_generator.sh` from your terminal).*
-
-A web page will magically open in your default browser perfectly formatted as a sleek dashboard.
+The first boot will securely download necessary math and mapping dependencies locally. A sleek web dashboard will then automatically appear in your browser.
 
 ---
 
-## 3. Dynamic Workflow: Bring What You Have
+## 🗺️ Using the 4-Tab Sourcing Roadmap
 
-The new Priority Precinct Generator is built around a **Flexible Input Matrix**. You do not need exactly 4 files to start. Instead:
+The application acts as a step-by-step concierge guiding you to perfectly format campaign data logic. You do *not* need to start with perfectly formatted mapping tables.
 
-### Step 1: Upload Baseline Inputs
-Navigate to the "**1. Core Data Upload**" tab and drag any of the following into their specific drop-zones:
-- `voter_file.csv`
-- `mprec_srprec.csv` (Crosswalk)
-- `srprec_city.csv` (City Mapping)
+### 1. 📁 Core Uploads
+Begin by uploading your baseline Voter Matrix.
+* **`voter_file.csv`**: Exported directly from your central Voter Database (NGP VAN / PDI / L2). Needs baseline demographics and voting history.
+* **`mprec_srprec.csv`**: The "Crosswalk". Request this directly from your County Registrar of Voters (ROV) office. It maps arbitrarily small database-level precincts to master County map precincts.
 
-### Step 2: The Decision Engine
-Check the top of your screen. The **Pipeline Status Panel** will constantly evaluate what it knows and what it is missing. Often, database exports do not strictly map out Legislative District allocations correctly.
+### 2. 🏙️ City Mapping Manager
+Your final export should contain City names so field organizers know where to dispatch volunteers easily. 
+If you don't have a mapping file indicating which precinct corresponds to which city:
+* **The Geospatial Autobuilder**: Download your *City Boundaries Shapefile* from your local County Open GIS Data portal or the US Census Bureau TIGER line website. Zipped it. Drop it alongside your zipped *Precinct Shapefile*, and the dashboard will mathematically crunch the lines and figure out what city every precinct lives in natively.
+* **The Template Method**: Click "Generate Excel Template" and manually type the cities into a pre-populated list if you prefer traditional data-entry.
 
-If the app detects you are missing District information, navigate to "**2. District Mapping Manager**". You will have 3 options to solve the blank spot:
-- **Option 1:** Upload a valid `district_assignment.csv` if another team member made one.
-- **Option 2 (Geospatial Auto-Builder):** Upload standard zipped map Shapefiles boundaries (`srprec_shapes.zip`, `assembly_shapes.zip`, `supervisorial_shapes.zip`). The app will boot up an internal mapping engine, project every precinct onto the map, extract its centroid, and intersect it against your Assembly and Supervisorial lines in seconds, saving you hours of QGIS mapping overhead!
-- **Option 3 (Template Generator):** Click the template button to have the app auto-generate an Excel worksheet perfectly formatted with your county's precincts pre-loaded into the columns, ready for you to manually tag.
+### 3. 🗺️ Legislative District Manager
+Your field efforts likely target an explicitly overlapping boundary (e.g. State Assembly 12 intersecting Supervisor District 2).
+If your voter database doesn't export these district columns natively:
+* **The Geospatial Autobuilder**: Again, download the *Legislative Boundaries Shapefile* directly from your local state redistricting site. Zip them, and upload them. The app will intersect the map boundaries seamlessly and assign districts automatically without ever launching QGIS.
 
-### Step 3: Math Configuration & Execution
-Once your status board reads green, navigate to "**3. Run & Results**".
-Use the sliders on the left boundary to tell the math engine exactly what campaign theory to prioritize:
-- **Turnout Gap:** Hunt for zones with high raw numbers of non-participating voters.
-- **Competitive Index:** Hunt for heavily contested "toss up" zones.
-- **Voter Density:** Hunt for massive neighborhood clusters to minimize canvasser walking time.
-
-Click **Execute**, and the screen will output real-time QA diagnostics and grant you a Download button for the localized Master Workbook!
+### 4. ✅ Execution & Priority Configuration
+Once your Dashboard Status Panel shows all Green validations, use the sliders to configure your exact mathematical Campaign priority (Turnout, Density, Competitiveness) and hit **Execute Precision Scoring**.
 
 ---
 
-## What is in the Master Workbook?
+## 📦 The 12-File Diagnostic Export System
 
-| Tab Name | Purpose |
-|----------|---------|
-| **`Overlap_AD12_SD2`** | **Start here.** Pre-sorted priority targets explicitly overlapping your required Assembly and Supervisorial boundaries. |
-| **`Scoring`** | The complete scoring breakdown for *every* mapped precinct in the entire county, regardless of targeted area. |
-| **`QA_Checks`** | A critical diagnostic tab explaining how many sub-precinct relationships failed to map properly. |
+Instead of a "black box" giving you an Excel file you blindly trust, the engine generates an explicit, auditable folder `outputs/run_TIMESTAMP/` locally on your computer upon every execution containing 12 critical files:
 
-### Technical Map & Math Theory
-For deep mathematical transparency, your `outputs/` folder will generate a **`debug_explainer.txt`** alongside every run, detailing exactly how the priority score resolved. For a structural breakdown of the pipeline itself, please read `technical_map.md` in the master project folder.
+**1. The Audit Log**
+* `10_pipeline_summary.txt`: A plain-English reading. Use this to verify Match Rates (Are we missing >5% of our mapping routes?) and see top targets explicitly.
+
+**2. The Mathematical Integrity Breakdowns**
+* `07_scoring_breakdown.csv`: Shows the *exact* Normalized formulas side-by-side for every single precinct.
+* `12_score_distribution.csv`: A frequency histogram of Priority Scores to detect if mathematical skews are grouping targets unnaturally.
+
+**3. The Join Tracking & QA (To find logic gaps)**
+* `11_join_diagnostics.csv`: Exact matrices of input rows vs matched rows vs unmatched rows for every database join.
+* `03_unmatched_mprec.csv` & `06_unmatched_districts.csv`: Did a piece of the map fail to draw? Was a sub-precinct missing from your ROV crosswalk? These explicitly output *which* rows failed so you can instantly patch them in your source database.
+* File `01`, `02`, `04`, and `05` provide sample snapshots of the raw grouped datasets exactly before scoring execution for maximum operational transparency.
+
+**4. The Final Master Targets**
+* `09_overlap_ad12_sd2.csv`: The pure, aggressively targeted overlapping precincts ready to be knocked.
+
+---
+
+### Technical Deep Dive
+For a flowchart outlining exactly how the python `geo_processor` coordinates physical Representative Bounds alongside the analytics engine to execute these commands, read `technical_map.md` in the parent directory!
