@@ -68,7 +68,7 @@ def load_inputs():
         inputs['city'] = city_df
         logging.info(f"Loaded SRPREC city mapping: {len(city_df)} rows.")
     except Exception as e:
-        logging.warning(f"Failed to load city mapping: {e}")
+        # Changed from silent swallow to explicit None. The runner explicitly validates this state on run.
         inputs['city'] = None
 
     try:
@@ -77,7 +77,6 @@ def load_inputs():
         inputs['dist'] = dist_df
         logging.info(f"Loaded district assignments: {len(dist_df)} rows.")
     except Exception as e:
-        logging.warning(f"Failed to load district assignments: {e}")
         inputs['dist'] = None
 
     # Validate essential columns
@@ -290,31 +289,36 @@ def score_precincts(df, weights=None):
         weights = {"turnout_gap": 0.45, "competitive_index": 0.35, "density": 0.20}
     
     # Calculate base fields
-    df['Turnout_Gap_2024'] = df['Total_Voters'] - df['Voted_2024']
+    df['Turnout_Dropoff_Rate'] = ((df['Voted_2022'] - df['Voted_2024']) / df['Total_Voters'].replace(0, np.nan)).fillna(0)
+    
+    # Secure Total Party constraint
     total_party = df['Dem'] + df['Rep'] + df['NPP'] + df['OtherParty']
     df['Dem_Share'] = (df['Dem'] / total_party.replace(0, np.nan)).fillna(0)
+    df['Rep_Share'] = (df['Rep'] / total_party.replace(0, np.nan)).fillna(0)
     
-    # Competitive Index: 1.0 is perfectly balanced (0.5 dem share), 0.0 is entirely homogeneous
-    df['Competitive_Index'] = 1 - abs(df['Dem_Share'] - 0.5) * 2
+    # Competitiveness: 1.0 is perfectly tied spread between specifically Dem and Rep (ignoring sheer volume of NPP).
+    df['Competitive_Index'] = 1 - abs(df['Dem_Share'] - df['Rep_Share'])
     df['Competitive_Index'] = df['Competitive_Index'].clip(lower=0, upper=1)
     
-    # Norm components using min-max
+    # Norm components using safe min-max
     def min_max_norm(series):
-        if series.max() == series.min():
-            return pd.Series(0, index=series.index)
-        return (series - series.min()) / (series.max() - series.min())
+        s_min = series.min()
+        s_max = series.max()
+        if pd.isna(s_min) or pd.isna(s_max) or s_max == s_min:
+            return pd.Series(0.0, index=series.index)
+        return (series - s_min) / (s_max - s_min)
         
-    tgap_norm = min_max_norm(df['Turnout_Gap_2024'])
+    tdrop_norm = min_max_norm(df['Turnout_Dropoff_Rate'])
     comp_norm = min_max_norm(df['Competitive_Index'])
     voter_norm = min_max_norm(df['Total_Voters'])
     
     # Transparent normalized components
-    df['Normalized_Turnout_Gap'] = tgap_norm
+    df['Normalized_Turnout_Drop'] = tdrop_norm
     df['Normalized_Competitive_Index'] = comp_norm
-    df['Normalized_Density'] = voter_norm
+    df['Normalized_Voter_Volume'] = voter_norm
     
     # Priority Score Formula
-    df['Priority_Score'] = weights["turnout_gap"] * tgap_norm + weights["competitive_index"] * comp_norm + weights["density"] * voter_norm
+    df['Priority_Score'] = (weights["turnout_gap"] * tdrop_norm) + (weights["competitive_index"] * comp_norm) + (weights["density"] * voter_norm)
     df['Rank'] = df['Priority_Score'].rank(ascending=False, method='min').astype(int)
     
     # Sort
@@ -332,7 +336,10 @@ def export_outputs(voter_flags, mprec_agg, srprec_agg, base_df, score_df):
     overlap_df.sort_values('Priority_Score', ascending=False, inplace=True)
     
     print("\nTop 20 Overlap Precincts (AD 12 / SD 2):")
-    print(overlap_df[['SRPREC', 'CITY', 'Total_Voters', 'Turnout_Gap_2024', 'Competitive_Index', 'Priority_Score']].head(20).to_string())
+    if not overlap_df.empty:
+        print(overlap_df[['SRPREC', 'CITY', 'Total_Voters', 'Turnout_Dropoff_Rate', 'Competitive_Index', 'Priority_Score']].head(20).to_string())
+    else:
+        print("NO PRECINCTS FOUND WITHIN THIS DISTRICT BOUNDARY COMBINATION.")
     
     # Save CSVs
     mprec_agg.to_csv(os.path.join(CONFIG['OUTPUT_DIR'], 'mprec_aggregate.csv'), index=False)
@@ -393,23 +400,23 @@ def write_debug_explainer(weights):
         f.write("---------------------------------\n")
         f.write("   The Priority Score ranks precincts on three criteria against all other precincts using a normalized 0 to 1 scale.\n\n")
         
-        f.write("   A. Turnout Gap\n")
-        f.write("      Formula: Total Voters - Voters who voted in 2024\n")
-        f.write("      Why: Identifies precincts with highest raw numbers of non-participating voters (high upside).\n")
+        f.write("   A. Turnout Dropoff Rate (Replaces 'Turnout Gap')\n")
+        f.write("      Formula: (Voted_2022 - Voted_2024) / Total_Voters\n")
+        f.write("      Why: Identifies elasticity. We highlight areas capable of voting but currently dormant, stripping away raw population bias.\n")
         f.write(f"      Current Weight Applied: {weights['turnout_gap']*100:.1f}%\n\n")
         
-        f.write("   B. Competitive Index\n")
-        f.write("      Formula: 1 - (|Dem Share - 0.5| * 2)\n")
-        f.write("      Why: 1.0 represents a perfectly split toss-up area, while 0.0 represents a completely homogeneous area.\n")
+        f.write("   B. True Competitive Index\n")
+        f.write("      Formula: 1 - |Dem Share - Rep Share|\n")
+        f.write("      Why: Removes NPP independent dilution. Identifies extremely tight margins purely between the two engaged major parties.\n")
         f.write(f"      Current Weight Applied: {weights['competitive_index']*100:.1f}%\n\n")
         
-        f.write("   C. Voter Density\n")
+        f.write("   C. Voter Volume (Replaces 'Density')\n")
         f.write("      Formula: Total Registered Voters inside SRPREC boundaries\n")
-        f.write("      Why: Highly populated contiguous precincts have more doors to knock, minimizing transit time for field teams.\n")
+        f.write("      Why: Highly populated precincts have raw scaling advantages. (Note: Without explicit Area Polygon data, this measures magnitude, not geographic grouping).\n")
         f.write(f"      Current Weight Applied: {weights['density']*100:.1f}%\n\n")
 
         f.write("   Final Priority Score:\n")
-        f.write(f"      ({weights['turnout_gap']} * Turnout Gap Norm) + ({weights['competitive_index']} * Competitive Index Norm) + ({weights['density']} * Density Norm)\n\n")
+        f.write(f"      ({weights['turnout_gap']} * Turnout Norm) + ({weights['competitive_index']} * Competitive Norm) + ({weights['density']} * Volume Norm)\n\n")
 
         f.write("3. Quality Assurance Diagnostics:\n")
         f.write("---------------------------------\n")

@@ -69,9 +69,9 @@ with st.sidebar:
     st.markdown("---")
     
     st.subheader("Priority Formula Weights")
-    weight_turnout = st.slider("Turnout Gap", 0.0, 1.0, 0.45)
-    weight_comp = st.slider("Competitive Index", 0.0, 1.0, 0.35)
-    weight_density = st.slider("Voter Density", 0.0, 1.0, 0.20)
+    weight_turnout = st.slider("Turnout Dropoff", 0.0, 1.0, 0.45)
+    weight_comp = st.slider("True Competitiveness", 0.0, 1.0, 0.35)
+    weight_density = st.slider("Voter Volume", 0.0, 1.0, 0.20)
     
     tot = weight_turnout + weight_comp + weight_density
     if tot == 0: tot = 1; weight_turnout=0.33; weight_comp=0.33; weight_density=0.33
@@ -175,7 +175,9 @@ with tab2:
                     else:
                         with st.spinner("Crunching spatial matrices..."):
                             res = generate_city_assignment_from_shapes("data/srprec_shapes.zip", "data/city_shapes.zip", "data")
-                            if res["status"] == "success": st.success(res['message'])
+                            if res["status"] == "success": 
+                                st.success(res['message'])
+                                st.rerun()  # Hard reset to update status
                             else: st.error(res['message'])
 
         with opt3:
@@ -232,7 +234,9 @@ with tab3:
                     else:
                         with st.spinner("Crunching spatial matrices... (This can take a minute)"):
                             res = generate_district_assignment_from_shapes("data/srprec_shapes.zip", "data/assembly_shapes.zip", "data/supervisorial_shapes.zip", "data")
-                            if res["status"] == "success": st.success(res['message'])
+                            if res["status"] == "success": 
+                                st.success(res['message'])
+                                st.rerun()  # Hard reset to update status
                             else: st.error(res['message'])
 
         with opt3:
@@ -284,8 +288,12 @@ with tab4:
                 for w in result["warnings"]: st.warning(f"⚠ {w}")
                 
             elif result.get("status") == "success":
-                st.snow()
-                st.success("✅ Analysis & Diagnostic Generation Complete!")
+                # Ensure the mathematics actually found data.
+                if result.get("top_precincts", pd.DataFrame()).empty:
+                    st.warning("⚠️ Analysis Completed, but NO PRECINCTS were found matching your district bounds. Check your assignment inputs.")
+                else:
+                    st.snow()
+                    st.success("✅ Analysis & Diagnostic Generation Complete!")
                 
                 # ... same metric output code as before
                 metrics = result["qa_metrics"]
