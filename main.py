@@ -2,6 +2,7 @@ import pandas as pd
 import numpy as np
 import logging
 import os
+from core_diagnostics import generate_diagnostic_outputs
 
 # --- Configuration Section ---
 CONFIG = {
@@ -189,6 +190,16 @@ def join_crosswalk(mprec_agg, mprec_cw):
     merged = pd.merge(mprec_agg, mprec_cw, left_on='MPREC', right_on='mprec', how='left')
     
     unmatched = merged[merged['srprec'].isna()]
+    match_rate = ((len(merged) - len(unmatched)) / len(merged)) * 100 if len(merged) > 0 else 0
+    
+    QA_METRICS['mprec_input'] = len(merged)
+    QA_METRICS['mprec_matched'] = len(merged) - len(unmatched)
+    QA_METRICS['mprec_unmatched'] = len(unmatched)
+    QA_METRICS['mprec_match_rate'] = f"{match_rate:.1f}%"
+    
+    if match_rate < 95.0:
+        QA_METRICS.setdefault('pipeline_warnings', []).append(f"CRITICAL: MPREC match rate < 95% (Actual: {match_rate:.1f}%)")
+        
     if not unmatched.empty:
         logging.warning(f"{len(unmatched)} MPRECs failed to map to an SRPREC.")
         QA_COLLECTIONS['unmatched_mprec'] = unmatched[['MPREC', 'Total_Voters']]
@@ -240,6 +251,16 @@ def join_city_and_districts(srprec_agg, city_cw, dist_cw):
     # Join District
     merged = pd.merge(merged, dist_cw, left_on='SRPREC', right_on='srprec', how='left')
     unmatched_dist = merged[merged['assembly_district'].isna() | merged['supervisorial_district'].isna()]
+    
+    match_rate = ((len(merged) - len(unmatched_dist)) / len(merged)) * 100 if len(merged) > 0 else 0
+    QA_METRICS['dist_input'] = len(merged)
+    QA_METRICS['dist_matched'] = len(merged) - len(unmatched_dist)
+    QA_METRICS['dist_unmatched'] = len(unmatched_dist)
+    QA_METRICS['dist_match_rate'] = f"{match_rate:.1f}%"
+    
+    if match_rate < 95.0:
+        QA_METRICS.setdefault('pipeline_warnings', []).append(f"CRITICAL: SRPREC district match rate < 95% (Actual: {match_rate:.1f}%)")
+        
     if not unmatched_dist.empty:
         logging.warning(f"{len(unmatched_dist)} SRPRECs failed to map to districts.")
         QA_COLLECTIONS['unmatched_srprec_district'] = unmatched_dist[['SRPREC', 'Total_Voters']]
@@ -278,12 +299,18 @@ def score_precincts(df, weights=None):
     comp_norm = min_max_norm(df['Competitive_Index'])
     voter_norm = min_max_norm(df['Total_Voters'])
     
+    # Transparent normalized components
+    df['Normalized_Turnout_Gap'] = tgap_norm
+    df['Normalized_Competitive_Index'] = comp_norm
+    df['Normalized_Density'] = voter_norm
+    
     # Priority Score Formula
     df['Priority_Score'] = weights["turnout_gap"] * tgap_norm + weights["competitive_index"] * comp_norm + weights["density"] * voter_norm
     df['Rank'] = df['Priority_Score'].rank(ascending=False, method='min').astype(int)
     
     # Sort
     return df.sort_values('Priority_Score', ascending=False)
+
 
 def export_outputs(voter_flags, mprec_agg, srprec_agg, base_df, score_df):
     logging.info("Step 8 & 9: Exporting outputs")
@@ -413,12 +440,53 @@ def run_pipeline(weights=None):
         
         logging.info("Pipeline completed successfully.")
         
+        # Extended Logic Validation Checks
+        if not score_df.empty:
+            if (score_df['Total_Voters'] == 0).any():
+                QA_METRICS.setdefault('pipeline_warnings', []).append("CRITICAL: Found SRPRECs with 0 Total Voters.")
+            if (score_df['Voted_2024'] > score_df['Total_Voters']).any():
+                QA_METRICS.setdefault('pipeline_warnings', []).append("CRITICAL: Precints found with Turnout > Registered Voters.")
+            if ((score_df['Dem'] + score_df['Rep'] + score_df['NPP']) > score_df['Total_Voters']).any():
+                QA_METRICS.setdefault('pipeline_warnings', []).append("CRITICAL: Precincts found where Dem + Rep + NPP > Total Voters.")
+        
         # Determine overlap dataframe to return to the UI
         overlap_df = score_df[
             (score_df['Assembly_District'].astype(str) == '12.0') | (score_df['Assembly_District'].astype(str) == '12') &
             (score_df['Supervisorial_District'].astype(str) == '2.0') | (score_df['Supervisorial_District'].astype(str) == '2')
         ].copy()
         overlap_df.sort_values('Priority_Score', ascending=False, inplace=True)
+        
+        # Consolidate join_diagnostics
+        jd_data = {
+            'step_name': ['MPREC_to_SRPREC', 'SRPREC_to_DISTRICT'],
+            'input_rows': [QA_METRICS.get('mprec_input'), QA_METRICS.get('dist_input')],
+            'matched_rows': [QA_METRICS.get('mprec_matched'), QA_METRICS.get('dist_matched')],
+            'unmatched_rows': [QA_METRICS.get('mprec_unmatched'), QA_METRICS.get('dist_unmatched')],
+            'match_rate': [QA_METRICS.get('mprec_match_rate'), QA_METRICS.get('dist_match_rate')]
+        }
+        join_diag_df = pd.DataFrame(jd_data)
+        
+        # State Dictionary for Diagnostics Output System
+        state_dict = {
+            'voter_flags': voter_flags,
+            'mprec_agg': mprec_agg,
+            'unmatched_mprec': QA_COLLECTIONS.get('unmatched_mprec', pd.DataFrame()),
+            'srprec_agg': srprec_agg,
+            'base_df': base_df,
+            'unmatched_districts': QA_COLLECTIONS.get('unmatched_srprec_district', pd.DataFrame()),
+            'score_df': score_df,
+            'top_precincts': overlap_df,
+            'join_diagnostics': join_diag_df,
+            'pipeline_warnings': QA_METRICS.get('pipeline_warnings', []),
+            'weights': weights
+        }
+        
+        # Trigger the new comprehensive 12-file audit system
+        summary_path = generate_diagnostic_outputs(CONFIG["OUTPUT_DIR"], state_dict)
+        
+        if summary_path:
+            with open(summary_path, 'r', encoding='utf-8') as sf:
+                print(sf.read())
         
         return {
             "status": "success",
