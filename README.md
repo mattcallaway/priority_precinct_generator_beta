@@ -40,7 +40,7 @@ If your voter database doesn't export these district columns natively:
 * **The Geospatial Autobuilder**: Again, download the *Legislative Boundaries Shapefile* directly from your local state redistricting site. Zip them, and upload them. The app will intersect the map boundaries seamlessly and assign districts automatically without ever launching QGIS.
 
 ### 4. ✅ Execution & Priority Configuration
-Once your Dashboard Status Panel shows all Green validations, use the sliders to configure your exact mathematical Campaign priority (Turnout, Density, Competitiveness) and hit **Execute Precision Scoring**.
+Once your Dashboard Status Panel shows all Green validations, use the sliders to configure your exact mathematical Campaign priority. **Note: Sliders are strictly truth-enforced.** The *True Density* slider will be disabled if you have not extracted Physical Area from Shapefiles. *Turnout Elasticity* will be disabled if your Voter File lacks prior-cycle history. Once your parameters are set and target districts are dynamically chosen from the dropdowns, hit **Execute Precision Scoring**.
 
 ---
 
@@ -61,7 +61,7 @@ Instead of a "black box" giving you an Excel file you blindly trust, the engine 
 * File `01`, `02`, `04`, and `05` provide sample snapshots of the raw grouped datasets exactly before scoring execution for maximum operational transparency.
 
 **4. The Final Master Targets**
-* `09_overlap_ad12_sd2.csv`: The pure, aggressively targeted overlapping precincts ready to be knocked.
+* `09_target_overlap.csv`: The pure, aggressively targeted overlapping precincts ready to be knocked exactly based on the dynamic subset parameters selected in the execution UI.
 
 ---
 

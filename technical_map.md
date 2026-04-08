@@ -117,24 +117,26 @@ The engine is engineered to find the **paths of least resistance with maximum lo
 
 To prevent erratic numerical skewing, the `Priority Score` normalizes all variables down to a `Min-Max [0, 1.0]` scale. The worst precinct in the county gets a `0.0`, the strongest gets a `1.0`.
 
-### Variable 1: Turnout Gap (Default Weight: 45%)
-* **Campaign Theory:** High-turnout precincts are heavily saturated. Increasing margins there requires aggressive, expensive *persuasion* of entrenched voters. Conversely, precincts with massive gaps between overall registration and historical turnout offer enormous, cheaper *mobilization* upside. Let's aim the field program at dormant targets.
+### Variable 1: Turnout Elasticity (Turnout Dropoff Rate)
+* **Campaign Theory:** Focusing strictly on registered voters who actually voted in previous high-engagement cycles (e.g., 2022) but dropped off in the current cycle isolates true mobilization targets. These are proven voters, not dead-weight registry entries. 
 * **Math Execution:** 
-  - `Raw Turnout Gap = Total Count of Precinct Voters - Count of Voters who cast a ballot in 2024`
-  - Normalized: `(Precinct Gap - County Min Gap) / (County Max Gap - County Min Gap)`
+  - `Turnout Dropoff Rate = (Voted_Prior - Voted_Current) / Total_Voters`
+  - Normalized: `(Precinct Drop - County Min) / (County Max - County Min)`
+  - **Dependency Block:** This entire metric permanently disables if the voter file lacks prior-cycle history.
 
-### Variable 2: Competitive Index (Default Weight: 35%)
-* **Campaign Theory:** Focusing on ultra-deep blue areas yields diminishing state-wide electoral returns. Instead, the tightest splits yield the highest value per single mobilized voter (since you are mobilizing an ally within an area where the opponent is attempting to mobilize theirs, creating a neutralizing defensive front).
+### Variable 2: True Competitive Index
+* **Campaign Theory:** Independent (NPP) voters dilute raw party shares. By isolating only the registered Democrats and Republicans within a precinct, we can find areas where the partisan ground war is genuinely tied, maximizing the defensive/offensive value of a knocked door.
 * **Math Execution:** 
   - `Dem Share = Dem / (Dem + Rep + NPP + Other)`
-  - `Deviation = |Dem Share - 0.50|` *(How far from a perfect tie is it?)*
-  - `Index = 1 - (Deviation * 2)`
-  - A mathematically tied `0.50` yields a `1.0`. A completely homogeneous `0.10` or `0.90` collapses toward `0.20`.
+  - `Rep Share = Rep / (Dem + Rep + NPP + Other)`
+  - `Index = 1 - |Dem Share - Rep Share|`
+  - A perfectly tied margin between the two major parties yields `1.0`.
 
-### Variable 3: Voter Density (Default Weight: 20%)
-* **Campaign Theory:** Field organizing is a game of physics. Asking volunteers to commute between endless 10-acre rural parcels destroys canvasser morale and contact rates. We must bias toward thick neighborhood groupings.
+### Variable 3: True Area Density 
+* **Campaign Theory:** Field organizing is a game of physics. Commuting across 10-acre rural parcels destroys volunteer morale. We must bias toward physical density, not just population size.
 * **Math Execution:** 
-  - Direct normalization of the raw localized `Total_Voters` count.
+  - `True Density = Total_Voters / Area_Sq_Miles`
+  - **Dependency Block:** Physical Area dynamically generated via `EPSG:5070` Equal Area projections in `geo_processor.py`. If shapefiles are not provided, this entire metric permanently disables rather than spoofing density using raw total counts.
 
 > [!CAUTION]  
 > **Diagnostic Flag Hooks**  
