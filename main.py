@@ -107,25 +107,34 @@ def validate_data(inputs):
 
 def generate_template():
     """
-    Looks at the MPREC crosswalk and generates a template district_assignment.csv
-    populated with all known SRPRECs for manual data entry.
+    Looks at the MPREC crosswalk and generates template assignments
+    for both Districts and Cities.
     """
     try:
         mprec_df = pd.read_csv(CONFIG["MPREC_CROSSWALK"])
         mprec_df = normalize_columns(mprec_df)
         unique_srprecs = mprec_df['srprec'].dropna().unique()
         
-        template_df = pd.DataFrame({
+        # District Template
+        dist_df = pd.DataFrame({
             'SRPREC': unique_srprecs,
             'assembly_district': [''] * len(unique_srprecs),
             'supervisorial_district': [''] * len(unique_srprecs)
         })
+        dist_path = os.path.join(CONFIG["OUTPUT_DIR"], 'district_assignment_template.csv')
+        dist_df.to_csv(dist_path, index=False)
         
-        out_path = os.path.join(CONFIG["OUTPUT_DIR"], 'district_assignment_template.csv')
-        template_df.to_csv(out_path, index=False)
-        return {"status": "success", "path": out_path}
+        # City Template
+        city_df = pd.DataFrame({
+            'srprec': unique_srprecs,
+            'city': [''] * len(unique_srprecs)
+        })
+        city_path = os.path.join(CONFIG["OUTPUT_DIR"], 'srprec_city_template.csv')
+        city_df.to_csv(city_path, index=False)
+        
+        return {"status": "success", "dist_path": dist_path, "city_path": city_path}
     except Exception as e:
-        return {"status": "error", "message": f"Could not generate template. Need crosswalk first: {e}"}
+        return {"status": "error", "message": f"Could not generate templates. Need MPREC crosswalk first: {e}"}
 
 def build_voter_flags(df):
     logging.info("Step 2: Building voter helper flags")

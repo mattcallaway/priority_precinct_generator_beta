@@ -118,3 +118,68 @@ def generate_district_assignment_from_shapes(srprec_zip, assembly_zip, sup_zip, 
             "status": "error",
             "message": str(e)
         }
+
+def generate_city_assignment_from_shapes(srprec_zip, city_zip, output_dir):
+    """
+    Intake zipped shapefiles for precincts and municipal boundaries to build srprec_city.csv
+    Precincts falling outside city polygons get labeled as 'Unincorporated'.
+    """
+    logging.info("Starting Auto-generation of City Assignments from Shapefile Zips...")
+    
+    try:
+        logging.info("Loading SRPREC shapefile.")
+        srprec_gdf = gpd.read_file(f"zip://{srprec_zip}")
+        
+        logging.info("Loading City boundary shapefile.")
+        city_gdf = gpd.read_file(f"zip://{city_zip}")
+        
+        base_crs = "EPSG:3857"
+        srprec_gdf = srprec_gdf.to_crs(base_crs)
+        city_gdf = city_gdf.to_crs(base_crs)
+        
+        srprec_id_col = None
+        for col in srprec_gdf.columns:
+            if col.upper() in ['SRPREC', 'PRECINCT', 'ID', 'GEOID']:
+                srprec_id_col = col
+                break
+                
+        city_id_col = None
+        for col in city_gdf.columns:
+            if 'CITY' in col.upper() or 'NAME' in col.upper() or 'MUNI' in col.upper():
+                city_id_col = col
+                break
+
+        if not srprec_id_col or not city_id_col:
+            raise KeyError("Could not guess the identifying columns in the uploaded shapefiles.")
+
+        # Center point intersection
+        points_gdf = srprec_gdf.copy()
+        points_gdf["geometry"] = points_gdf.representative_point()
+        
+        join_city = gpd.sjoin(points_gdf, city_gdf, how="left", predicate="intersects")
+        
+        df_out = pd.DataFrame(join_city)
+        # Handle nan for unincorporated zones
+        df_out[city_id_col] = df_out[city_id_col].fillna("Unincorporated")
+        
+        df_out = df_out[[srprec_id_col, city_id_col]].copy()
+        df_out.rename(columns={
+            srprec_id_col: 'srprec',
+            city_id_col: 'city'
+        }, inplace=True)
+        
+        out_csv = os.path.join(output_dir, "srprec_city.csv")
+        df_out.to_csv(out_csv, index=False)
+        logging.info(f"Successfully wrote generated city mapping to {out_csv}")
+        
+        return {
+            "status": "success", 
+            "message": f"Generated City mapping file. Mapped {len(df_out)} precincts."
+        }
+        
+    except Exception as e:
+        logging.error(f"Geo-processing City failed: {str(e)}")
+        return {
+            "status": "error",
+            "message": str(e)
+        }
