@@ -1,102 +1,55 @@
 # Priority Precinct Generator (Beta)
 
-Welcome to the automated pipeline for the **Priority Precinct Generator**. This is a standalone tool designed to consume raw voter data and map it together with precinct geographies (specifically targeting Assembly District 12 and Supervisorial District 2) to help prioritize campaign organizing and field efforts.
+Welcome to the automated pipeline for the **Priority Precinct Generator**. This tool is designed to consume raw voter data and map it together with precinct geographies (specifically targeting Assembly District 12 and Supervisorial District 2) to help prioritize campaign organizing and field efforts.
 
-This project uses local Python scripts, meaning all data is parsed directly on your computer securely with no web servers or databases required.
-
-## 1. Prerequisites (What you need on your computer)
-
-Before you begin, you only need two things installed on your computer:
-1. **Python**: The programming language that runs the scripts. You can download it for free from [python.org](https://www.python.org/downloads/). (Make sure to check the box that says "Add Python to PATH" during installation).
-2. **Your Input Files**: You will need to export 3 to 4 CSV (comma-separated values) spreadsheets from your voter database and mapping resources.
+This project uses local Python scripts, meaning all data is parsed directly on your computer securely with no web servers or databases required. **We have recently upgraded this tool with a beautifully simple, one-click Graphical User Interface (GUI) to replace the old terminal workflow!**
 
 ---
 
-## 2. Preparing Your Input Data
+## 1. Prerequisites
 
-The script works by looking for a folder named `data` and reading your CSV files from it. 
-
-### Step 2a: Create the Data Folder
-1. Open the project folder (`priority_precinct_generator_beta`).
-2. Inside that folder, create a new empty folder and name it exactly: `data`
-
-### Step 2b: Prepare and Rename Your Files
-You need to place real CSV files into that `data` folder. The script has been programmed to look for specific file names. Rename your downloaded files to match these **exactly**:
-
-1. **`voter_file.csv`**
-   - **What it is:** The raw list of registered voters.
-   - **Required Columns:** It *must* have columns named `PrecinctName`, `Party`, `General24`, and `General22`. (It's okay if it has additional columns like `mCity` or `Age`). The script is smart enough to handle capitalization differences (e.g., `precinctname` vs. `PrecinctName`).
-
-2. **`mprec_srprec.csv`**
-   - **What it is:** The crosswalk file linking your Voter File Precincts (MPREC) to the Master Precinct Boundaries (SRPREC).
-   - **Required Columns:** It *must* have columns `mprec` and `srprec`. 
-
-3. **`srprec_city.csv`**
-   - **What it is:** A mapping file tying the Master Precinct Boundaries (SRPREC) to the city name (e.g., Santa Rosa, Petaluma, etc.).
-   - **Required Columns:** It *must* have columns `srprec` and `city`.
-
-4. **`district_assignment.csv`**
-   - **What it is:** A map of overlapping districts to determine who belongs to Assembly District 12 and Superisorial District 2. 
-   - **Required Columns:** It *must* have columns `SRPREC`, `Assembly_District`, and `Supervisorial_District`.
-   - *Note:* If you do not have this file, there is a blank template provided in the project called `district_assignment_template.csv`. You can open it in Excel, manually fill in your SRPREC numbers and their corresponding districts, rename it `district_assignment.csv`, and place it in the `data` folder.
-
-**CRITICAL WARNING:** 
-If you misspell these file names (e.g., `voter-file.csv` instead of `voter_file.csv`), the script will not be able to find your data and will throw an error immediately telling you so.
+Before you begin, you only need two things prepared:
+1. **Python**: The programming language that runs the scripts in the background. You can download it for free from [python.org](https://www.python.org/downloads/). (Make sure to check the box that says "Add Python to PATH" during installation).
+2. **Your Input Files**: You will need to export 4 CSV (comma-separated values) spreadsheets from your voter database and mapping resources. The exact column names required are displayed inside the application.
 
 ---
 
-## 3. Running the Pipeline
+## 2. Running the Application
 
-Once your files are securely in the `data` folder, executing the tool takes just seconds.
+Forget typing terminal commands. To start the application, simply:
 
-### Step 3a: Open your Command Prompt / Terminal
-- On Windows: Press `Win + R`, type `cmd`, and press Enter.
-- On Mac: Open Spotlight (`Cmd + Space`), type `Terminal`, and press Enter.
+### **If you use Windows:**
+Double-click the **`run_generator.bat`** file inside this folder.
+*(The first time you run it, it might take a minute to download the required components. Afterwards, it will instantly launch.)*
 
-### Step 3b: Navigate to the Project Folder
-Use the `cd` (change directory) command to point your terminal to the project folder. For example:
-```bash
-cd Documents/priority_precinct_generator_beta
-```
+### **If you use Mac/Linux:**
+Double-click the **`run_generator.sh`** file.
+*(Or run `bash run_generator.sh` from your terminal).*
 
-### Step 3c: (First Time Only) Setup the Code
-The very first time you use the tool on a computer, you must tell Python to download the required spreadsheet tools (`pandas` and `openpyxl`). Type this and press enter:
-```bash
-python -m pip install -r requirements.txt
-```
-
-### Step 3d: Run the Generator
-To crunch the data, type this single command and press Enter:
-```bash
-python main.py
-```
-You will immediately see text output in your console confirming that it is reading your files, matching the geography, scoring the precincts, and generating your Excel workbook!
+A web page will magically open in your default browser perfectly formatted as a sleek dashboard.
 
 ---
 
-## 4. Reading the Outputs
+## 3. Using the Dashboard
 
-When the script finishes, a new folder will magically appear in your project folder called `outputs`. Inside it, you will find your master deliverable: **`precinct_targeting_workbook.xlsx`** (along with raw `.csv` versions of every sheet for portability).
+Once the app is open:
+1. **Upload your files:** Simply drag and drop your `voter_file.csv`, `mprec_srprec.csv`, `srprec_city.csv`, and `district_assignment.csv` files directly onto the drop zones on the screen. The interface will tell you exactly which columns you need inside them.
+2. **Adjust Weights (Optional):** Use the sliders on the left-hand sidebar if you wish to adjust the mathematical weights determining how much Turnout Gap, Competitiveness, or Voter Density impacts the final Priority Score.
+3. **Generate Strategy:** Click the bold "Generate Strategy Dashboard" button.
+4. **View & Download:** Wait just a few moments while the engine chunks through your big data. The screen will automatically refresh with your top precinct targets, QA diagnostic metrics, and a one-click button to download your final master `.xlsx` Workbook.
 
-### Important Tabs in your Excel Workbook:
+---
+
+## What is in the Master Workbook?
 
 | Tab Name | Purpose |
 |----------|---------|
 | **`Overlap_AD12_SD2`** | **Start here.** This tab contains only the precincts sitting squarely in both Assembly District 12 and Supervisorial District 2. They are pre-sorted from highest `Priority_Score` to lowest. These are the doors you want to knock first. |
 | **`Scoring`** | The complete scoring breakdown for *every* mapped precinct in the entire county/source file, not just the overlap. |
-| **`QA_Checks`** | A critical diagnostic tab. It tells you exactly how many voters were ingested and whether any MPREC/SRPREC relationships failed to map. |
+| **`QA_Checks`** | A critical diagnostic tab. It tells you exactly how many voters were ingested and whether any relationships failed to map. |
 | **`Raw_Voter_Sample`** | A tiny 500-voter sample of the source data so you can verify the participation/party flags applied correctly. |
 
-### How is the Priority Score Calculated?
-The `Priority_Score` ranks your precincts on three criteria. Higher scores are always better:
-- **45% - Turnout Gap:** We favor precincts with high numbers of non-voters (e.g. they missed 2024). They represent the highest upside.
-- **35% - Competitive Index:** We favor "toss-up" precincts that split 50/50 over heavily homogenous single-party districts where turnout impacts the ultimate margin less significantly.
-- **20% - Voter Density:** We favor larger precincts natively, maximizing the raw number of targetable voters on a single block to reduce transit times for canvassers.
+---
 
 ### Did something go wrong?
-If the numbers look bizarre, look inside the `outputs/` folder for three special `.csv` files:
-- `unmatched_mprec.csv`
-- `unmatched_srprec_city.csv`
-- `unmatched_srprec_district.csv`
-
-If there are rows in these files, it signifies mapping blind spots (i.e. a voter lived in an MPREC that simply didn't exist in your crosswalk file linking it to an SRPREC). You can update your raw data and run the script over again anytime.
+If the unmatched mappings metric is high on your app screen, or a file crashes during upload, the most common issue is missing columns. Ensure that your raw data matches the column names requested inside the app *exactly* (spelling matters)! Any problematic outputs will still be saved inside your local `outputs/` folder.

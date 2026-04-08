@@ -28,6 +28,12 @@ logging.getLogger('').addHandler(console)
 QA_COLLECTIONS = {}
 QA_METRICS = {}
 
+def reset_qa():
+    global QA_COLLECTIONS, QA_METRICS
+    QA_COLLECTIONS.clear()
+    QA_METRICS.clear()
+
+
 def normalize_columns(df):
     """Normalize column names by stripping whitespace and mapping to standard names if needed."""
     df.columns = df.columns.str.strip().str.lower()
@@ -210,8 +216,11 @@ def join_city_and_districts(srprec_agg, city_cw, dist_cw):
     
     return merged
 
-def score_precincts(df):
+def score_precincts(df, weights=None):
     logging.info("Step 7: Computing scoring fields")
+    
+    if weights is None:
+        weights = {"turnout_gap": 0.45, "competitive_index": 0.35, "density": 0.20}
     
     # Calculate base fields
     df['Turnout_Gap_2024'] = df['Total_Voters'] - df['Voted_2024']
@@ -232,9 +241,8 @@ def score_precincts(df):
     comp_norm = min_max_norm(df['Competitive_Index'])
     voter_norm = min_max_norm(df['Total_Voters'])
     
-    # Priority Score Formula (Proof of concept)
-    # Higher score prioritizing large numbers of low-turnout voters in a heavily competitive district
-    df['Priority_Score'] = 0.45 * tgap_norm + 0.35 * comp_norm + 0.20 * voter_norm
+    # Priority Score Formula
+    df['Priority_Score'] = weights["turnout_gap"] * tgap_norm + weights["competitive_index"] * comp_norm + weights["density"] * voter_norm
     df['Rank'] = df['Priority_Score'].rank(ascending=False, method='min').astype(int)
     
     # Sort
@@ -293,8 +301,55 @@ def export_outputs(voter_flags, mprec_agg, srprec_agg, base_df, score_df):
         
     logging.info(f"Successfully generated {wb_path}")
 
-def main():
+def write_debug_explainer(weights):
+    explainer_path = os.path.join(CONFIG['OUTPUT_DIR'], 'debug_explainer.txt')
+    with open(explainer_path, 'w', encoding='utf-8') as f:
+        f.write("=========================================\n")
+        f.write("      PIPELINE EXECUTION EXPLAINER\n")
+        f.write("=========================================\n\n")
+        
+        f.write("1. Data Flow & File Interactions:\n")
+        f.write("--------------------------------\n")
+        f.write("   - Read `voter_file.csv`. Filtered to 2022/2024 general election turnout and parsed party associations (Dem, Rep, NPP, Other).\n")
+        f.write("   - Rolled individual voters up into their base Precinct (MPREC).\n")
+        f.write("   - Matched each MPREC to a Master Supervisor Precinct (SRPREC) via `mprec_srprec.csv` crosswalk.\n")
+        f.write("   - Grouped multiple MPRECs under unified SRPREC totals.\n")
+        f.write("   - Joined each SRPREC to City boundaries using `srprec_city.csv` and to legislative boundaries using `district_assignment.csv`.\n\n")
+        
+        f.write("2. Mathematical Formulas Applied:\n")
+        f.write("---------------------------------\n")
+        f.write("   The Priority Score ranks precincts on three criteria against all other precincts using a normalized 0 to 1 scale.\n\n")
+        
+        f.write("   A. Turnout Gap\n")
+        f.write("      Formula: Total Voters - Voters who voted in 2024\n")
+        f.write("      Why: Identifies precincts with highest raw numbers of non-participating voters (high upside).\n")
+        f.write(f"      Current Weight Applied: {weights['turnout_gap']*100:.1f}%\n\n")
+        
+        f.write("   B. Competitive Index\n")
+        f.write("      Formula: 1 - (|Dem Share - 0.5| * 2)\n")
+        f.write("      Why: 1.0 represents a perfectly split toss-up area, while 0.0 represents a completely homogeneous area.\n")
+        f.write(f"      Current Weight Applied: {weights['competitive_index']*100:.1f}%\n\n")
+        
+        f.write("   C. Voter Density\n")
+        f.write("      Formula: Total Registered Voters inside SRPREC boundaries\n")
+        f.write("      Why: Highly populated contiguous precincts have more doors to knock, minimizing transit time for field teams.\n")
+        f.write(f"      Current Weight Applied: {weights['density']*100:.1f}%\n\n")
+
+        f.write("   Final Priority Score:\n")
+        f.write(f"      ({weights['turnout_gap']} * Turnout Gap Norm) + ({weights['competitive_index']} * Competitive Index Norm) + ({weights['density']} * Density Norm)\n\n")
+
+        f.write("3. Quality Assurance Diagnostics:\n")
+        f.write("---------------------------------\n")
+        f.write(f"   - Total Rows Loaded: {QA_METRICS.get('total_voter_rows', 0):,}\n")
+        f.write(f"   - Total SRPRECs Mapped: {QA_METRICS.get('total_unique_srprecs', 0):,}\n")
+        f.write(f"   - Failed MPREC Mappings: {QA_METRICS.get('unmatched_mprecs_count', 0):,} (Failed to link MPREC to an SRPREC)\n")
+        f.write(f"   - Missing District Maps: {QA_METRICS.get('unmatched_srprecs_district_count', 0):,} (Linked to SRPREC but Assembly/Supervisorial district map entry was blank or missing)\n\n")
+        
+    logging.info(f"Successfully generated {explainer_path}")
+
+def run_pipeline(weights=None):
     try:
+        reset_qa()
         inputs = load_inputs()
         voter_flags = build_voter_flags(inputs['voters'])
         
@@ -304,15 +359,38 @@ def main():
         srprec_agg = aggregate_srprec(mprec_join)
         
         base_df = join_city_and_districts(srprec_agg, inputs['city'], inputs['dist'])
-        score_df = score_precincts(base_df)
+        score_df = score_precincts(base_df, weights)
         
+        # weights might have been set to default if None
+        if weights is None:
+            weights = {"turnout_gap": 0.45, "competitive_index": 0.35, "density": 0.20}
+            
         export_outputs(voter_flags, mprec_agg, srprec_agg, base_df, score_df)
+        write_debug_explainer(weights)
         
         logging.info("Pipeline completed successfully.")
+        
+        # Determine overlap dataframe to return to the UI
+        overlap_df = score_df[
+            (score_df['Assembly_District'].astype(str) == '12.0') | (score_df['Assembly_District'].astype(str) == '12') &
+            (score_df['Supervisorial_District'].astype(str) == '2.0') | (score_df['Supervisorial_District'].astype(str) == '2')
+        ].copy()
+        overlap_df.sort_values('Priority_Score', ascending=False, inplace=True)
+        
+        return {
+            "status": "success",
+            "qa_metrics": QA_METRICS.copy(),
+            "qa_collections": QA_COLLECTIONS.copy(),
+            "top_precincts": overlap_df
+        }
         
     except Exception as e:
         logging.error(f"Pipeline failed: {e}", exc_info=True)
         print(f"Pipeline failed: {e}")
+        return {"status": "error", "error": str(e)}
+
+def main():
+    run_pipeline()
 
 if __name__ == "__main__":
     main()
