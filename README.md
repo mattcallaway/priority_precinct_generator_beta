@@ -1,16 +1,15 @@
 # Priority Precinct Generator (Beta)
 
-Welcome to the automated pipeline for the **Priority Precinct Generator**. This tool is designed to consume raw voter data and map it together with precinct geographies (specifically targeting Assembly District 12 and Supervisorial District 2) to help prioritize campaign organizing and field efforts.
+Welcome to the automated pipeline for the **Priority Precinct Generator**. This tool evaluates raw campaign data alongside precinct-level geographies to identify exactly where your field program can achieve tactical advantages.
 
-This project uses local Python scripts, meaning all data is parsed directly on your computer securely with no web servers or databases required. **We have recently upgraded this tool with a beautifully simple, one-click Graphical User Interface (GUI) to replace the old terminal workflow!**
+This project is entirely local, ensuring 100% data security. **It features a smart, highly-usable Drag-and-Drop Data Dashboard designed to ingest messy data, figure out what's missing, and help you automatically build missing logic maps via internal Geographic Information Systems (GIS) rendering.**
 
 ---
 
 ## 1. Prerequisites
 
-Before you begin, you only need two things prepared:
-1. **Python**: The programming language that runs the scripts in the background. You can download it for free from [python.org](https://www.python.org/downloads/). (Make sure to check the box that says "Add Python to PATH" during installation).
-2. **Your Input Files**: You will need to export 4 CSV (comma-separated values) spreadsheets from your voter database and mapping resources. The exact column names required are displayed inside the application.
+1. **Python**: Required to run the background engine. Don't worry about being technical—just download it from [python.org](https://www.python.org/downloads/) and ensure you check "Add Python to PATH" during installation.
+2. **Your Available Data**: Download what you have from your voter database. (You *no longer* need perfectly formatted outputs prior to running the app!)
 
 ---
 
@@ -20,7 +19,7 @@ Forget typing terminal commands. To start the application, simply:
 
 ### **If you use Windows:**
 Double-click the **`run_generator.bat`** file inside this folder.
-*(The first time you run it, it might take a minute to download the required components. Afterwards, it will instantly launch.)*
+*(The first time you run it, it might take a minute to download the required mapping components like Geopandas. Afterwards, it will instantly launch.)*
 
 ### **If you use Mac/Linux:**
 Double-click the **`run_generator.sh`** file.
@@ -30,13 +29,32 @@ A web page will magically open in your default browser perfectly formatted as a 
 
 ---
 
-## 3. Using the Dashboard
+## 3. Dynamic Workflow: Bring What You Have
 
-Once the app is open:
-1. **Upload your files:** Simply drag and drop your `voter_file.csv`, `mprec_srprec.csv`, `srprec_city.csv`, and `district_assignment.csv` files directly onto the drop zones on the screen. The interface will tell you exactly which columns you need inside them.
-2. **Adjust Weights (Optional):** Use the sliders on the left-hand sidebar if you wish to adjust the mathematical weights determining how much Turnout Gap, Competitiveness, or Voter Density impacts the final Priority Score.
-3. **Generate Strategy:** Click the bold "Generate Strategy Dashboard" button.
-4. **View & Download:** Wait just a few moments while the engine chunks through your big data. The screen will automatically refresh with your top precinct targets, QA diagnostic metrics, and a one-click button to download your final master `.xlsx` Workbook.
+The new Priority Precinct Generator is built around a **Flexible Input Matrix**. You do not need exactly 4 files to start. Instead:
+
+### Step 1: Upload Baseline Inputs
+Navigate to the "**1. Core Data Upload**" tab and drag any of the following into their specific drop-zones:
+- `voter_file.csv`
+- `mprec_srprec.csv` (Crosswalk)
+- `srprec_city.csv` (City Mapping)
+
+### Step 2: The Decision Engine
+Check the top of your screen. The **Pipeline Status Panel** will constantly evaluate what it knows and what it is missing. Often, database exports do not strictly map out Legislative District allocations correctly.
+
+If the app detects you are missing District information, navigate to "**2. District Mapping Manager**". You will have 3 options to solve the blank spot:
+- **Option 1:** Upload a valid `district_assignment.csv` if another team member made one.
+- **Option 2 (Geospatial Auto-Builder):** Upload standard zipped map Shapefiles boundaries (`srprec_shapes.zip`, `assembly_shapes.zip`, `supervisorial_shapes.zip`). The app will boot up an internal mapping engine, project every precinct onto the map, extract its centroid, and intersect it against your Assembly and Supervisorial lines in seconds, saving you hours of QGIS mapping overhead!
+- **Option 3 (Template Generator):** Click the template button to have the app auto-generate an Excel worksheet perfectly formatted with your county's precincts pre-loaded into the columns, ready for you to manually tag.
+
+### Step 3: Math Configuration & Execution
+Once your status board reads green, navigate to "**3. Run & Results**".
+Use the sliders on the left boundary to tell the math engine exactly what campaign theory to prioritize:
+- **Turnout Gap:** Hunt for zones with high raw numbers of non-participating voters.
+- **Competitive Index:** Hunt for heavily contested "toss up" zones.
+- **Voter Density:** Hunt for massive neighborhood clusters to minimize canvasser walking time.
+
+Click **Execute**, and the screen will output real-time QA diagnostics and grant you a Download button for the localized Master Workbook!
 
 ---
 
@@ -44,12 +62,9 @@ Once the app is open:
 
 | Tab Name | Purpose |
 |----------|---------|
-| **`Overlap_AD12_SD2`** | **Start here.** This tab contains only the precincts sitting squarely in both Assembly District 12 and Supervisorial District 2. They are pre-sorted from highest `Priority_Score` to lowest. These are the doors you want to knock first. |
-| **`Scoring`** | The complete scoring breakdown for *every* mapped precinct in the entire county/source file, not just the overlap. |
-| **`QA_Checks`** | A critical diagnostic tab. It tells you exactly how many voters were ingested and whether any relationships failed to map. |
-| **`Raw_Voter_Sample`** | A tiny 500-voter sample of the source data so you can verify the participation/party flags applied correctly. |
+| **`Overlap_AD12_SD2`** | **Start here.** Pre-sorted priority targets explicitly overlapping your required Assembly and Supervisorial boundaries. |
+| **`Scoring`** | The complete scoring breakdown for *every* mapped precinct in the entire county, regardless of targeted area. |
+| **`QA_Checks`** | A critical diagnostic tab explaining how many sub-precinct relationships failed to map properly. |
 
----
-
-### Did something go wrong?
-If the unmatched mappings metric is high on your app screen, or a file crashes during upload, the most common issue is missing columns. Ensure that your raw data matches the column names requested inside the app *exactly* (spelling matters)! Any problematic outputs will still be saved inside your local `outputs/` folder.
+### Technical Map & Math Theory
+For deep mathematical transparency, your `outputs/` folder will generate a **`debug_explainer.txt`** alongside every run, detailing exactly how the priority score resolved. For a structural breakdown of the pipeline itself, please read `technical_map.md` in the master project folder.
