@@ -1,19 +1,18 @@
 import streamlit as st
 import pandas as pd
 import os
-import shutil
-import base64
-from main import run_pipeline, generate_template
+import io
 
-# Make sure geo_processor exists in the same folder and imports correctly
 try:
-    from geo_processor import generate_district_assignment_from_shapes, generate_city_assignment_from_shapes
+    from geo_processor import generate_district_assignment_from_shapes, generate_city_assignment_from_shapes, extract_precinct_metrics
     GEO_AVAILABLE = True
 except ImportError:
     GEO_AVAILABLE = False
 
+from main import run_pipeline, generate_template
+
 st.set_page_config(
-    page_title="Priority Precinct Generator",
+    page_title="Priority Precinct Generator (Strict Mode)",
     page_icon="🗺️",
     layout="wide",
     initial_sidebar_state="expanded"
@@ -39,15 +38,16 @@ def save_uploaded(file_obj, filename):
         with open(os.path.join("data", filename), "wb") as f:
             f.write(file_obj.getbuffer())
 
-# --- PIPELINE STATUS REAL-TIME CHECKER ---
+# --- REAL-TIME CHECKER & DEPENDENCY MAP ---
 def check_status():
     status = {
         "voter": os.path.exists("data/voter_file.csv"),
         "mprec": os.path.exists("data/mprec_srprec.csv"),
         "city": os.path.exists("data/srprec_city.csv"),
         "dist": os.path.exists("data/district_assignment.csv"),
+        "metrics": os.path.exists("data/srprec_metrics.csv"),
+        "has_prior_turnout": False,
         
-        # Geoprocessor detection
         "shp_srprec": os.path.exists("data/srprec_shapes.zip"),
         "shp_city": os.path.exists("data/city_shapes.zip"),
         "shp_assem": os.path.exists("data/assembly_shapes.zip"),
@@ -56,53 +56,75 @@ def check_status():
     status["dist_shapefiles_ready"] = status["shp_srprec"] and status["shp_assem"] and status["shp_sup"]
     status["city_shapefiles_ready"] = status["shp_srprec"] and status["shp_city"]
     status["ready_to_score"] = status["voter"] and status["mprec"] and status["city"] and status["dist"]
+    
+    # Check for Prior Turnout in Voter File safely
+    if status["voter"]:
+        try:
+            head = pd.read_csv("data/voter_file.csv", nrows=1)
+            cols = [c.lower().strip() for c in head.columns]
+            # Looking for 2022 explicitly as a fallback rule
+            if 'general22' in cols or any('2022' in c for c in cols):
+                status["has_prior_turnout"] = True
+        except:
+            pass
+
     return status
 
-st.title("🗺️ Priority Precinct Generator (Beta)")
-st.caption("Smart Pipeline: Upload what you have — we'll fill in the gaps.")
+status = check_status()
 
-# --- SIDEBAR: Configuration ---
+st.title("🗺️ Priority Precinct Generator (Strict Mode)")
+st.caption("No assumptions. No fake boundaries. Only explicit inputs.")
+
+# --- SIDEBAR: STRICT CONFIGURATION ---
 with st.sidebar:
-    st.header("⚙️ Configuration")
+    st.header("⚙️ Score Configuration")
+    st.info("The application locks capabilities that lack backing data.")
     
-    auto_gen = st.toggle("Auto-generate missing datasets", value=True, help="If data is missing but shapefiles exist, automatically build the required mapping files natively.")
-    st.markdown("---")
-    
+    can_underperf = status["has_prior_turnout"]
+    can_density = status["metrics"] or status["shp_srprec"]
+
     st.subheader("Priority Formula Weights")
-    weight_turnout = st.slider("Turnout Dropoff", 0.0, 1.0, 0.45)
-    weight_comp = st.slider("True Competitiveness", 0.0, 1.0, 0.35)
-    weight_density = st.slider("Voter Volume", 0.0, 1.0, 0.20)
     
+    weight_turnout = st.slider(
+        "Turnout Elasticity", 0.0, 1.0, 0.45 if can_underperf else 0.0, 
+        disabled=not can_underperf,
+        help="Requires voters file with prior-cycle history (e.g. 2022 turnout)."
+    )
+    if not can_underperf: st.caption("❌ Unavailable: Missing Prior-Cycle Turnout")
+
+    weight_comp = st.slider("True Competitiveness", 0.0, 1.0, 0.35)
+    
+    weight_density = st.slider(
+        "True Density (Area)", 0.0, 1.0, 0.20 if can_density else 0.0,
+        disabled=not can_density,
+        help="Requires physical Map Area extracted from Precinct Shapefiles."
+    )
+    if not can_density: st.caption("❌ Unavailable: Missing Shapefile Area Polygons")
+
+    # Re-normalize missing weights gracefully without throwing divide by zero
     tot = weight_turnout + weight_comp + weight_density
-    if tot == 0: tot = 1; weight_turnout=0.33; weight_comp=0.33; weight_density=0.33
-    weights = {"turnout_gap": weight_turnout/tot, "competitive_index": weight_comp/tot, "density": weight_density/tot}
+    if tot == 0:
+        tot = 1
+        weight_comp = 1.0 # fallback to absolute competitiveness
+    
+    weights = {
+        "turnout_gap": weight_turnout/tot, 
+        "competitive_index": weight_comp/tot, 
+        "density": weight_density/tot
+    }
 
 # --- STATUS PANEL ---
-status = check_status()
 st.markdown('<div class="status-box">', unsafe_allow_html=True)
-st.subheader("📊 Pipeline Status")
-stat_cols = st.columns(4)
-stat_cols[0].markdown(f"**Voter File:** {'✅ Loaded' if status['voter'] else '❌ Missing'}")
-stat_cols[1].markdown(f"**Crosswalk:** {'✅ Loaded' if status['mprec'] else '❌ Missing'}")
+st.subheader("📊 Data Dependency Status")
+stat_cols = st.columns(5)
+stat_cols[0].markdown(f"**Voter File:** {'✅' if status['voter'] else '❌'}")
+stat_cols[1].markdown(f"**Crosswalk:** {'✅' if status['mprec'] else '❌'}")
+stat_cols[2].markdown(f"**City Map:** {'✅' if status['city'] else ('🟡' if status['city_shapefiles_ready'] else '❌')}")
+stat_cols[3].markdown(f"**District Map:** {'✅' if status['dist'] else ('🟡' if status['dist_shapefiles_ready'] else '❌')}")
+stat_cols[4].markdown(f"**True Area:** {'✅' if status['metrics'] else ('🟡' if status['shp_srprec'] else '❌')}")
 
-# City Dynamic Status
-if status['city']:
-    stat_cols[2].markdown("**City Map:** ✅ Loaded")
-elif status['city_shapefiles_ready']:
-    stat_cols[2].markdown("**City Map:** 🟡 Ready to Generate")
-else:
-    stat_cols[2].markdown("**City Map:** ❌ Missing")
-
-# District Dynamic Status
-if status['dist']:
-    stat_cols[3].markdown("**District Map:** ✅ Loaded")
-elif status['dist_shapefiles_ready']:
-    stat_cols[3].markdown("**District Map:** 🟡 Ready to Generate")
-else:
-    stat_cols[3].markdown("**District Map:** ❌ Missing")
-
-if not status['ready_to_score']:
-    st.warning("Action Needed: Please provide the missing files below to unlock the Scoring Pipeline.")
+if not (status['voter'] and status['mprec']):
+    st.warning("Action Needed: Core data files missing. Cannot proceed.")
 st.markdown('</div>', unsafe_allow_html=True)
 
 # --- TABS ---
@@ -110,220 +132,152 @@ tab1, tab2, tab3, tab4 = st.tabs([
     "📁 1. Core Data Upload", 
     "🏙️ 2. City Mapping Manager", 
     "🗺️ 3. District Mapping Manager", 
-    "🚀 4. Run & Results"
+    "🚀 4. Geography & Execution"
 ])
 
 # --- TAB 1: CORE DATA ---
 with tab1:
     st.markdown("### Upload Core Voter Files")
-    st.info("💡 **File Sourcing Roadmap:** Grab these files directly from your central Voter Database (NGP VAN / PDI). You do NOT need mapping data yet.")
+    st.info("💡 **File Sourcing:** Grab these directly from your central Voter Database (NGP VAN / PDI). Do NOT invent mapping columns yet.")
     
     c1, c2 = st.columns(2)
-    
     with c1:
         voter_up = st.file_uploader("1. Voter File (`voter_file.csv`)", type=['csv'])
-        st.markdown('<div class="hint-text">Source: Export your raw registered voter list directly from VAN/PDI.</div>', unsafe_allow_html=True)
         if voter_up: save_uploaded(voter_up, "voter_file.csv")
-    
     with c2:
         mprec_up = st.file_uploader("2. MPREC Crosswalk (`mprec_srprec.csv`)", type=['csv'])
-        st.markdown('<div class="hint-text">Source: Request the "Master to Subprecinct Crosswalk" list from your County Registrar of Voters (ROV).</div>', unsafe_allow_html=True)
         if mprec_up: save_uploaded(mprec_up, "mprec_srprec.csv")
-
-    if st.button("Refresh Status", key="ref1"):
-        st.rerun()
+    
+    if st.button("Refresh Status", key="ref1"): st.rerun()
 
 # --- TAB 2: CITY MAPPING MANAGER ---
 with tab2:
     st.markdown("### City Assignment Manager")
-    st.info("💡 **What is this?** This assigns a recognizable city to the precinct in the final sheet so volunteers know where they are driving.")
-    
     if status['city']:
-        st.success("✅ `srprec_city.csv` is already loaded into the system. You are good to go!")
-        if st.button("🗑️ Remove City Mapping to start over"):
-            os.remove("data/srprec_city.csv")
-            st.rerun()
-            
+        st.success("✅ `srprec_city.csv` is loaded.")
+        if st.button("🗑️ Remove City Mapping"): os.remove("data/srprec_city.csv"); st.rerun()
     else:
-        opt1, opt2, opt3 = st.tabs(["Option 1: Upload Existing CSV", "Option 2: Generate via Shapefiles", "Option 3: Manual Entry Template"])
-        
+        opt1, opt2, opt3 = st.tabs(["Upload CSV", "Generate via Shapefiles", "Manual Template"])
         with opt1:
-            st.markdown("If you or a colleague already built a `.csv` with columns `srprec` and `city`, drop it here:")
-            c_up = st.file_uploader("Upload CSV", type=['csv'], key="city_csv_up")
-            if c_up:
-                save_uploaded(c_up, "srprec_city.csv")
-                st.success("Saved! Refesh the app.")
-                if st.button("Refresh", key="ref_city"): st.rerun()
-                
+            c_up = st.file_uploader("Upload pre-made City CSV", type=['csv'], key="c1")
+            if c_up: save_uploaded(c_up, "srprec_city.csv"); st.rerun()
         with opt2:
-            st.markdown("**Auto-Builder Roadmap:** We can automatically stamp the city name onto your precincts by smashing two map polygons together physically.")
-            st.markdown('<div class="hint-text">Source: Download the City/Municipal Boundaries Shapefile from your Official County GIS Web Portal or the US Census Bureau TIGER line website. Always upload shapefiles as .zip archives!</div>', unsafe_allow_html=True)
-            
-            if not GEO_AVAILABLE:
-                st.error("Missing Geopandas dependency.")
-            else:
-                sc1, sc2 = st.columns(2)
-                shp_srprec = sc1.file_uploader("SRPREC Shapes (.zip)", type=['zip'], key="city_srp_up")
-                shp_city = sc2.file_uploader("City/Municipal Shapes (.zip)", type=['zip'], key="city_shp_up")
-                
-                if shp_srprec: save_uploaded(shp_srprec, "srprec_shapes.zip")
-                if shp_city: save_uploaded(shp_city, "city_shapes.zip")
-                
-                if st.button("🗺️ Generate City Mapping from Shapes", type="primary"):
-                    if not (os.path.exists("data/srprec_shapes.zip") and os.path.exists("data/city_shapes.zip")):
-                        st.error("Please upload both zip archives first.")
-                    else:
-                        with st.spinner("Crunching spatial matrices..."):
-                            res = generate_city_assignment_from_shapes("data/srprec_shapes.zip", "data/city_shapes.zip", "data")
-                            if res["status"] == "success": 
-                                st.success(res['message'])
-                                st.rerun()  # Hard reset to update status
-                            else: st.error(res['message'])
+            sc1, sc2 = st.columns(2)
+            shp_srprec = sc1.file_uploader("SRPREC Shapes (.zip)", type=['zip'], key="csrd")
+            shp_city = sc2.file_uploader("City Shapes (.zip)", type=['zip'], key="ccyd")
+            if shp_srprec: save_uploaded(shp_srprec, "srprec_shapes.zip")
+            if shp_city: save_uploaded(shp_city, "city_shapes.zip")
+            if st.button("🗺️ Generate City Map & Extract Area"):
+                if os.path.exists("data/srprec_shapes.zip"):
+                    res_m = extract_precinct_metrics("data/srprec_shapes.zip", "data")
+                if os.path.exists("data/srprec_shapes.zip") and os.path.exists("data/city_shapes.zip"):
+                    res = generate_city_assignment_from_shapes("data/srprec_shapes.zip", "data/city_shapes.zip", "data")
+                    if res["status"] == "success": st.success("Generated!"); st.rerun()
 
         with opt3:
-            st.write("Generate a blank Excel sheet pre-filled with all your unique sub-precincts. Type the city names in locally and upload it to Option 1.")
-            if not status['mprec']:
-                st.error("Upload the Core Crosswalk in Tab 1 first so we know what precincts to generate!")
-            else:
-                if st.button("📄 Generate City Excel Template"):
-                    res = generate_template()
-                    if res["status"] == "success":
-                        st.success("Generated! Download below.")
-                        with open(res["city_path"], "rb") as f:
-                            st.download_button("Download Blank Template", data=f, file_name="srprec_city_template.csv", mime="text/csv")
+            if st.button("Generate City Template"):
+                res = generate_template(); st.success("OK")
 
 # --- TAB 3: DISTRICT MAPPING MANAGER ---
 with tab3:
     st.markdown("### Legislative District Manager")
-    st.info("💡 **What is this?** A mapping file that routes precincts into specific Assembly and Supervisorial Districts.")
-    
     if status['dist']:
-        st.success("✅ `district_assignment.csv` is already loaded into the system.")
-        if st.button("🗑️ Remove District file to start over"):
-            os.remove("data/district_assignment.csv")
-            st.rerun()
+        st.success("✅ `district_assignment.csv` is loaded.")
+        if st.button("🗑️ Remove District Mapping"): os.remove("data/district_assignment.csv"); st.rerun()
     else:
-        opt1, opt2, opt3 = st.tabs(["Option 1: Upload Existing CSV", "Option 2: Generate via Shapefiles", "Option 3: Manual Entry Template"])
-        
+        opt1, opt2, opt3 = st.tabs(["Upload CSV", "Generate via Shapefiles", "Manual Template"])
         with opt1:
-            st.write("Upload a `.csv` with columns `SRPREC`, `assembly_district`, `supervisorial_district`.")
-            d_up = st.file_uploader("Upload CSV", type=['csv'], key="dist_up")
-            if d_up:
-                save_uploaded(d_up, "district_assignment.csv")
-                if st.button("Refresh", key="ref_dist"): st.rerun()
-                
+            d_up = st.file_uploader("Upload District CSV", type=['csv'], key="d1")
+            if d_up: save_uploaded(d_up, "district_assignment.csv"); st.rerun()
         with opt2:
-            st.markdown("**Auto-Builder Roadmap:** Smash legislative boundaries against precincts to automatically assign districts.")
-            st.markdown('<div class="hint-text">Source: Download the Assembly and Supervisorial Shapefiles from the official State Redistricting Commission or County GIS Open Data portal. Always upload shapefiles as .zip archives! (If you already uploaded the SRPREC zip in City Mapping, it will carry over automatically).</div>', unsafe_allow_html=True)
+            sc1, sc2, sc3 = st.columns(3)
+            shp_srprec2 = sc1.file_uploader("SRPREC Shapes (.zip)", type=['zip'], key="dscrd")
+            shp_assem = sc2.file_uploader("Assembly Shapes (.zip)", type=['zip'], key="dasmd")
+            shp_sup = sc3.file_uploader("Supervisor Shapes (.zip)", type=['zip'], key="dsupd")
             
-            if not GEO_AVAILABLE:
-                st.error("Missing Geopandas dependency.")
-            else:
-                sc1, sc2, sc3 = st.columns(3)
-                shp_srprec2 = sc1.file_uploader("SRPREC Shapes (.zip)", type=['zip'], key="dist_srp_up")
-                shp_assem = sc2.file_uploader("Assembly Shapes (.zip)", type=['zip'], key="dist_assem_up")
-                shp_sup = sc3.file_uploader("Supervisor Shapes (.zip)", type=['zip'], key="dist_sup_up")
-                
-                if shp_srprec2: save_uploaded(shp_srprec2, "srprec_shapes.zip")
-                if shp_assem: save_uploaded(shp_assem, "assembly_shapes.zip")
-                if shp_sup: save_uploaded(shp_sup, "supervisorial_shapes.zip")
-                
-                if st.button("🗺️ Generate Assignments from Shapes", use_container_width=True, type="primary", key="gendist"):
-                    if not (os.path.exists("data/srprec_shapes.zip") and os.path.exists("data/assembly_shapes.zip") and os.path.exists("data/supervisorial_shapes.zip")):
-                        st.error("Please ensure all 3 zip archives are provided.")
-                    else:
-                        with st.spinner("Crunching spatial matrices... (This can take a minute)"):
-                            res = generate_district_assignment_from_shapes("data/srprec_shapes.zip", "data/assembly_shapes.zip", "data/supervisorial_shapes.zip", "data")
-                            if res["status"] == "success": 
-                                st.success(res['message'])
-                                st.rerun()  # Hard reset to update status
-                            else: st.error(res['message'])
+            if shp_srprec2: save_uploaded(shp_srprec2, "srprec_shapes.zip")
+            if shp_assem: save_uploaded(shp_assem, "assembly_shapes.zip")
+            if shp_sup: save_uploaded(shp_sup, "supervisorial_shapes.zip")
+            
+            if st.button("🗺️ Generate District Map & Extract Area", type="primary"):
+                if os.path.exists("data/srprec_shapes.zip"):
+                    extract_precinct_metrics("data/srprec_shapes.zip", "data")
+                if os.path.exists("data/srprec_shapes.zip") and os.path.exists("data/assembly_shapes.zip") and os.path.exists("data/supervisorial_shapes.zip"):
+                    res = generate_district_assignment_from_shapes("data/srprec_shapes.zip", "data/assembly_shapes.zip", "data/supervisorial_shapes.zip", "data")
+                    if res.get("status") == "success": st.success("Generated!"); st.rerun()
 
         with opt3:
-            st.write("Generate a blank Excel template pre-filled with all known precincts to manually track districts.")
-            if not status['mprec']:
-                st.error("Upload the Core Crosswalk in Tab 1 first!")
-            else:
-                if st.button("📄 Generate District Excel Template"):
-                    res = generate_template()
-                    if res["status"] == "success":
-                        st.success("Generated! Download below.")
-                        with open(res["dist_path"], "rb") as f:
-                            st.download_button("Download Blank Template", data=f, file_name="district_assignment_template.csv", mime="text/csv")
+            if st.button("Generate District Template"): generate_template()
 
-
-# --- TAB 4: RUN & RESULTS ---
+# --- TAB 4: RUN & RESULTS (DYNAMIC TARGETING) ---
 with tab4:
-    st.markdown("### Generate Scoring Strategy")
+    st.markdown("### Target Extraction Parameters")
     
-    can_auto_city = auto_gen and status['city_shapefiles_ready'] and not status['city']
-    can_auto_dist = auto_gen and status['dist_shapefiles_ready'] and not status['dist']
-    
-    if can_auto_city or can_auto_dist:
-        st.info("💡 Auto-Gen Toggle is ON: System detected shapefiles and will automatically forge your missing mappings during execution!")
-        
-    can_run = (status['voter'] and status['mprec'] and 
-               (status['city'] or can_auto_city) and 
-               (status['dist'] or can_auto_dist))
-    
+    can_run = status['voter'] and status['mprec'] and (status['dist'] or status['dist_shapefiles_ready'])
     if not can_run:
-        st.error("Cannot proceed. Missing dependencies. Review the Pipeline Status Panel above.")
+        st.error("Missing Core Dependencies. Pipeline Locked.")
     else:
-        if st.button("🚀 Execute Precinct Scoring Pipeline", type="primary", use_container_width=True):
-            with st.spinner("Processing massive datasets and validating integrity..."):
-                
-                # Check Auto-gen condition in-flight
-                if can_auto_city:
-                    st.toast("Auto-generating City boundaries...")
-                    generate_city_assignment_from_shapes("data/srprec_shapes.zip", "data/city_shapes.zip", "data")
-                if can_auto_dist:
-                    st.toast("Auto-generating District boundaries...")
-                    generate_district_assignment_from_shapes("data/srprec_shapes.zip", "data/assembly_shapes.zip", "data/supervisorial_shapes.zip", "data")
-                
-                # Run main logic
-                result = run_pipeline(weights=weights)
+        # We must glean available districts if the file is manually loaded
+        ad_opts, sd_opts, city_opts = ["ALL"], ["ALL"], ["ALL"]
+        if status['dist']:
+            d_read = pd.read_csv("data/district_assignment.csv")
+            ad_opts += [str(x) for x in d_read.get('assembly_district', pd.Series()).dropna().unique().tolist()]
+            sd_opts += [str(x) for x in d_read.get('supervisorial_district', pd.Series()).dropna().unique().tolist()]
+        if status['city']:
+            c_read = pd.read_csv("data/srprec_city.csv")
+            city_opts += [str(x) for x in c_read.get('city', pd.Series()).dropna().unique().tolist()]
+            
+        st.info("Select Target Region constraints. Do not hardcode filters outside the UI.")
+        c1, c2, c3 = st.columns(3)
+        target_ad = c1.selectbox("Filter by Assembly District", ad_opts)
+        target_sd = c2.selectbox("Filter by Supervisorial District", sd_opts)
+        target_city = c3.selectbox("Filter by City", city_opts)
+        
+        target_params = {
+            "ad": None if target_ad == "ALL" else target_ad,
+            "sd": None if target_sd == "ALL" else target_sd,
+            "city": None if target_city == "ALL" else target_city,
+        }
+
+        if st.button("🚀 Execute Strict Precinct Scoring", type="primary", use_container_width=True):
+            with st.spinner("Executing Truth-Enforced Algorithms..."):
+                # Safety auto-hook if parameters chosen but shapefiles not fired
+                if not status['metrics'] and status['shp_srprec']: extract_precinct_metrics("data/srprec_shapes.zip", "data")
+                if not status['city'] and status['city_shapefiles_ready']: generate_city_assignment_from_shapes("data/srprec_shapes.zip", "data/city_shapes.zip", "data")
+                if not status['dist'] and status['dist_shapefiles_ready']: generate_district_assignment_from_shapes("data/srprec_shapes.zip", "data/assembly_shapes.zip", "data/supervisorial_shapes.zip", "data")
+
+                result = run_pipeline(weights=weights, target_params=target_params)
                 
             if result.get("status") == "validation_error":
-                st.error("❌ Pipeline blocked by data validation warnings:")
+                st.error("❌ Pipeline explicitly blocked by data validation failure:")
                 for w in result["warnings"]: st.warning(f"⚠ {w}")
                 
             elif result.get("status") == "success":
-                # Ensure the mathematics actually found data.
-                if result.get("top_precincts", pd.DataFrame()).empty:
-                    st.warning("⚠️ Analysis Completed, but NO PRECINCTS were found matching your district bounds. Check your assignment inputs.")
+                top_df = result.get("top_precincts", pd.DataFrame())
+                # STRICT OUTPUT FAIL-SAFE
+                if top_df.empty:
+                    st.error("❌ THE PIPELINE EXECUTED, BUT 0 PRECINCTS MATCHED YOUR TARGETING SELECTION.")
+                    st.info("The overlapping condition you set does not exist. No targeting output was generated.")
                 else:
-                    st.snow()
-                    st.success("✅ Analysis & Diagnostic Generation Complete!")
-                
-                # ... same metric output code as before
-                metrics = result["qa_metrics"]
-                m1, m2, m3, m4 = st.columns(4)
-                m1.markdown(f'<div class="metric-box"><div class="metric-title">Voters</div><div class="metric-value">{metrics.get("total_voter_rows", 0):,}</div></div>', unsafe_allow_html=True)
-                m2.markdown(f'<div class="metric-box"><div class="metric-title">Total SRPRECs</div><div class="metric-value">{metrics.get("total_unique_srprecs", 0):,}</div></div>', unsafe_allow_html=True)
-                
-                unm = metrics.get('unmatched_mprecs_count', 0)
-                m3.markdown(f'<div class="metric-box"><div class="metric-title">Broken MPRECs</div><div class="metric-value" style="color: {"red" if unm>0 else "green"};">{unm:,}</div></div>', unsafe_allow_html=True)
-                
-                und = metrics.get('unmatched_srprecs_district_count', 0)
-                m4.markdown(f'<div class="metric-box"><div class="metric-title">Unmapped Districts</div><div class="metric-value" style="color: {"red" if und>0 else "green"};">{und:,}</div></div>', unsafe_allow_html=True)
-                
-                # Downloads
-                st.markdown("### Export Files")
-                dl1, dl2 = st.columns(2)
-                
-                wb_path = os.path.join("outputs", "precinct_targeting_workbook.xlsx")
-                if os.path.exists(wb_path):
-                    with open(wb_path, "rb") as f:
-                        dl1.download_button("📥 Master Excel Workbook", data=f, file_name="precinct_targeting_workbook.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True, type="primary")
-                        
-                exp_path = os.path.join("outputs", "debug_explainer.txt")
-                if os.path.exists(exp_path):
-                    with open(exp_path, "r", encoding="utf-8") as f:
-                        dl2.download_button("📄 Math Explainer (Debug Log)", data=f.read(), file_name="debug_explainer.txt", mime="text/plain", use_container_width=True, type="secondary")
-
-                st.info("🔍 Fully transparent diagnostic files were also written to your local `outputs/run_TIMESTAMP` folder for manual auditing.")
+                    st.success("✅ Strict Data Execution Complete.")
+                    metrics = result["qa_metrics"]
+                    m1, m2, m3 = st.columns(3)
+                    m1.markdown(f'<div class="metric-box"><div class="metric-title">Voters</div><div class="metric-value">{metrics.get("total_voter_rows", 0):,}</div></div>', unsafe_allow_html=True)
+                    m2.markdown(f'<div class="metric-box"><div class="metric-title">Valid SRPRECs Found</div><div class="metric-value">{len(top_df):,}</div></div>', unsafe_allow_html=True)
+                    unm = metrics.get('unmatched_mprecs_count', 0)
+                    m3.markdown(f'<div class="metric-box"><div class="metric-title">Logic Breaks (Dropped MPRECs)</div><div class="metric-value" style="color: {"red" if unm>0 else "green"};">{unm:,}</div></div>', unsafe_allow_html=True)
+                    
+                    st.markdown("### Strict Log Files")
+                    dl1, dl2 = st.columns(2)
+                    wb_path = os.path.join("outputs", "precinct_targeting_workbook.xlsx")
+                    if os.path.exists(wb_path):
+                        with open(wb_path, "rb") as f:
+                            dl1.download_button("📥 Master Math Extractor (Excel)", data=f, file_name="precinct_targeting_workbook.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+                    exp_path = os.path.join("outputs", "debug_explainer.txt")
+                    if os.path.exists(exp_path):
+                        with open(exp_path, "r", encoding="utf-8") as f:
+                            dl2.download_button("📄 Exact Component Weights Applied Log", data=f.read(), file_name="debug_explainer.txt", mime="text/plain")
 
             else:
-                st.error("❌ Pipeline crashed during execution.")
-                with st.expander("Show Trace"):
-                    st.code(result.get("error", "Unknown error"))
+                st.error("❌ Critical Pipeline Crash.")
+                st.code(result.get("error", "Unknown Fault"))

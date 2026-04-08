@@ -1,0 +1,144 @@
+python : Step 1: Loading 
+input files
+At line:1 char:186
++ ... ding utf8 ; python r
+un_audit_tests_noemoji.py 
+> test_logs.txt 2>&1 ;  
+...
++                 ~~~~~~~~
+~~~~~~~~~~~~~~~~~~~~~~~~~~
+~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo        
+      : NotSpecified: (S  
+  tep 1: Loading input    
+ files:String) [], Rem    
+oteException
+    + FullyQualifiedError 
+   Id : NativeCommandErr  
+  or
+ 
+Overlap execution 
+resulted in 0 rows.
+Step 1: Loading input 
+files
+
+==================================
+   STARTING HARD REPAIR HARNESS
+==================================
+
+TEST 1: Truth-Enforced Impossible Overlaps...
+??? Handled impossible overlap cleanly (Returns empty, does not crash, does not fake success).
+
+TEST 2: Missing Area Graceful Degradation...
+Traceback (most recent 
+call last):
+  File "C:\Users\Mathew C\
+.gemini\antigravity\scratc
+h\priority_precinct_genera
+tor_beta\venv\Lib\site-pac
+kages\pandas\core\indexes\
+base.py", line 3641, in 
+get_loc
+    return self._engine.ge
+t_loc(casted_key)
+           ~~~~~~~~~~~~~~~
+~~~~~^^^^^^^^^^^^
+  File 
+"pandas/_libs/index.pyx", 
+line 168, in pandas._libs.
+index.IndexEngine.get_loc
+  File 
+"pandas/_libs/index.pyx", 
+line 197, in pandas._libs.
+index.IndexEngine.get_loc
+  File "pandas/_libs/hasht
+able_class_helper.pxi", 
+line 7668, in pandas._libs
+.hashtable.PyObjectHashTab
+le.get_item
+  File "pandas/_libs/hasht
+able_class_helper.pxi", 
+line 7676, in pandas._libs
+.hashtable.PyObjectHashTab
+le.get_item
+KeyError: 'Has_Area'
+
+The above exception was 
+the direct cause of the 
+following exception:
+
+Traceback (most recent 
+call last):
+  File "C:\Users\Mathew C\
+.gemini\antigravity\scratc
+h\priority_precinct_genera
+tor_beta\run_audit_tests_n
+oemoji.py", line 36, in 
+run_tests
+    if 
+score_df['Has_Area'][0] 
+== False:
+       
+~~~~~~~~^^^^^^^^^^^^
+  File "C:\Users\Mathew C\
+.gemini\antigravity\scratc
+h\priority_precinct_genera
+tor_beta\venv\Lib\site-pac
+kages\pandas\core\frame.py
+", line 4378, in 
+__getitem__
+    indexer = 
+self.columns.get_loc(key)
+  File "C:\Users\Mathew C\
+.gemini\antigravity\scratc
+h\priority_precinct_genera
+tor_beta\venv\Lib\site-pac
+kages\pandas\core\indexes\
+base.py", line 3648, in 
+get_loc
+    raise KeyError(key) 
+from err
+KeyError: 'Has_Area'
+
+During handling of the 
+above exception, another 
+exception occurred:
+
+Traceback (most recent 
+call last):
+  File "C:\Users\Mathew C\
+.gemini\antigravity\scratc
+h\priority_precinct_genera
+tor_beta\run_audit_tests_n
+oemoji.py", line 70, in 
+<module>
+    run_tests()
+    ~~~~~~~~~^^
+  File "C:\Users\Mathew C\
+.gemini\antigravity\scratc
+h\priority_precinct_genera
+tor_beta\run_audit_tests_n
+oemoji.py", line 58, in 
+run_tests
+    print(f"?\x9d? 
+CRITICAL HARNESS CRASH: 
+{traceback.format_exc()}")
+    ~~~~~^^^^^^^^^^^^^^^^^
+^^^^^^^^^^^^^^^^^^^^^^^^^^
+^^^^^^^^^^^^^^
+  File "C:\Users\Mathew C\
+AppData\Local\Programs\Pyt
+hon\Python313\Lib\encoding
+s\cp1252.py", line 19, in 
+encode
+    return codecs.charmap_
+encode(input,self.errors,e
+ncoding_table)[0]
+           ~~~~~~~~~~~~~~~
+~~~~~~^^^^^^^^^^^^^^^^^^^^
+^^^^^^^^^^^^^^
+UnicodeEncodeError: 
+'charmap' codec can't 
+encode character '\x9d' 
+in position 1: character 
+maps to <undefined>

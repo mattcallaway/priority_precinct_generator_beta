@@ -183,3 +183,48 @@ def generate_city_assignment_from_shapes(srprec_zip, city_zip, output_dir):
             "status": "error",
             "message": str(e)
         }
+
+def extract_precinct_metrics(srprec_zip, output_dir):
+    """
+    Extract physical area mathematically from shapefile geometries
+    to power the True Density calculation. Uses Equal Area projection (EPSG:5070)
+    for physical mileage accuracy.
+    """
+    import geopandas as gpd
+    import pandas as pd
+    import logging
+    import os
+    logging.info("Starting Auto-extraction of Precinct Metrics...")
+    try:
+        srprec_gdf = gpd.read_file(f"zip://{srprec_zip}")
+        
+        # Reproject to CONUS Albers Equal Area for accurate area calculations
+        srprec_gdf = srprec_gdf.to_crs("EPSG:5070")
+        
+        srprec_id_col = None
+        for col in srprec_gdf.columns:
+            if col.upper() in ['SRPREC', 'PRECINCT', 'ID', 'GEOID']:
+                srprec_id_col = col
+                break
+                
+        if not srprec_id_col:
+            raise KeyError("Could not guess mapping identifying columns in the shapefile.")
+            
+        # Calculate Area in Square Miles (1 sq meter = 0.000000386102 sq miles)
+        srprec_gdf['Area_Sq_Miles'] = srprec_gdf.geometry.area * 3.86102e-7
+        
+        df_out = srprec_gdf[[srprec_id_col, 'Area_Sq_Miles']].copy()
+        df_out.rename(columns={srprec_id_col: 'srprec'}, inplace=True)
+        
+        out_csv = os.path.join(output_dir, "srprec_metrics.csv")
+        df_out.to_csv(out_csv, index=False)
+        logging.info(f"Successfully extracted Area mapping to {out_csv}")
+        
+        return {
+            "status": "success",
+            "message": "True Area metrics successfully extracted."
+        }
+        
+    except Exception as e:
+        logging.error(f"Geo-processing Metrics failed: {str(e)}")
+        return {"status": "error", "message": str(e)}
