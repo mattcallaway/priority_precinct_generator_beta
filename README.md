@@ -1,65 +1,102 @@
 # Priority Precinct Generator (Beta)
 
-A simple, local Python proof-of-concept pipeline for evaluating precinct priorities targeting Assembly District 12 and Supervisorial District 2 in Sonoma County.
+Welcome to the automated pipeline for the **Priority Precinct Generator**. This is a standalone tool designed to consume raw voter data and map it together with precinct geographies (specifically targeting Assembly District 12 and Supervisorial District 2) to help prioritize campaign organizing and field efforts.
 
-## Setup
+This project uses local Python scripts, meaning all data is parsed directly on your computer securely with no web servers or databases required.
 
-1. Make sure Python 3.9+ is installed.
-2. Install dependencies:
-   ```bash
-   pip install -r requirements.txt
-   ```
+## 1. Prerequisites (What you need on your computer)
 
-## Expected Input Files
+Before you begin, you only need two things installed on your computer:
+1. **Python**: The programming language that runs the scripts. You can download it for free from [python.org](https://www.python.org/downloads/). (Make sure to check the box that says "Add Python to PATH" during installation).
+2. **Your Input Files**: You will need to export 3 to 4 CSV (comma-separated values) spreadsheets from your voter database and mapping resources.
 
-Place the following CSV files in the project root directory (or update the configuration in `main.py`):
+---
 
-- **voter_file.csv**: Raw voter data with these columns (minimum):
-  - `PrecinctName` (treated as the MPREC)
-  - `Party`
-  - `General24`
-  - `General22`
-  - *(Optional)* `Primary24`, `Age`, `mCity`
-- **mprec_srprec.csv**: Crosswalk file mapping Voter File Precincts (MPREC) to Master Precincts (SRPREC).
-  - Requires `mprec` and `srprec` columns.
-- **srprec_city.csv**: Mapping from SRPREC to California City.
-  - Requires `srprec` and `city` columns.
-- **district_assignment.csv**: Defines overlapping districts.
-  - Requires `SRPREC`, `Assembly_District`, `Supervisorial_District` columns. If you do not have mapping data yet, use `district_assignment_template.csv` to create a blank or manually populated mapping.
+## 2. Preparing Your Input Data
 
-## How to Run
+The script works by looking for a folder named `data` and reading your CSV files from it. 
 
-Execute the main script:
+### Step 2a: Create the Data Folder
+1. Open the project folder (`priority_precinct_generator_beta`).
+2. Inside that folder, create a new empty folder and name it exactly: `data`
+
+### Step 2b: Prepare and Rename Your Files
+You need to place real CSV files into that `data` folder. The script has been programmed to look for specific file names. Rename your downloaded files to match these **exactly**:
+
+1. **`voter_file.csv`**
+   - **What it is:** The raw list of registered voters.
+   - **Required Columns:** It *must* have columns named `PrecinctName`, `Party`, `General24`, and `General22`. (It's okay if it has additional columns like `mCity` or `Age`). The script is smart enough to handle capitalization differences (e.g., `precinctname` vs. `PrecinctName`).
+
+2. **`mprec_srprec.csv`**
+   - **What it is:** The crosswalk file linking your Voter File Precincts (MPREC) to the Master Precinct Boundaries (SRPREC).
+   - **Required Columns:** It *must* have columns `mprec` and `srprec`. 
+
+3. **`srprec_city.csv`**
+   - **What it is:** A mapping file tying the Master Precinct Boundaries (SRPREC) to the city name (e.g., Santa Rosa, Petaluma, etc.).
+   - **Required Columns:** It *must* have columns `srprec` and `city`.
+
+4. **`district_assignment.csv`**
+   - **What it is:** A map of overlapping districts to determine who belongs to Assembly District 12 and Superisorial District 2. 
+   - **Required Columns:** It *must* have columns `SRPREC`, `Assembly_District`, and `Supervisorial_District`.
+   - *Note:* If you do not have this file, there is a blank template provided in the project called `district_assignment_template.csv`. You can open it in Excel, manually fill in your SRPREC numbers and their corresponding districts, rename it `district_assignment.csv`, and place it in the `data` folder.
+
+**CRITICAL WARNING:** 
+If you misspell these file names (e.g., `voter-file.csv` instead of `voter_file.csv`), the script will not be able to find your data and will throw an error immediately telling you so.
+
+---
+
+## 3. Running the Pipeline
+
+Once your files are securely in the `data` folder, executing the tool takes just seconds.
+
+### Step 3a: Open your Command Prompt / Terminal
+- On Windows: Press `Win + R`, type `cmd`, and press Enter.
+- On Mac: Open Spotlight (`Cmd + Space`), type `Terminal`, and press Enter.
+
+### Step 3b: Navigate to the Project Folder
+Use the `cd` (change directory) command to point your terminal to the project folder. For example:
+```bash
+cd Documents/priority_precinct_generator_beta
+```
+
+### Step 3c: (First Time Only) Setup the Code
+The very first time you use the tool on a computer, you must tell Python to download the required spreadsheet tools (`pandas` and `openpyxl`). Type this and press enter:
+```bash
+python -m pip install -r requirements.txt
+```
+
+### Step 3d: Run the Generator
+To crunch the data, type this single command and press Enter:
 ```bash
 python main.py
 ```
+You will immediately see text output in your console confirming that it is reading your files, matching the geography, scoring the precincts, and generating your Excel workbook!
 
-## Outputs Produced
+---
 
-The pipeline will create an `outputs` directory containing:
+## 4. Reading the Outputs
 
-1. **precinct_targeting_workbook.xlsx**:
-   The primary deliverable. It includes sheets: `Raw_Voter_Sample`, `Voter_With_Flags`, `MPREC_Aggregate`, `SRPREC_Aggregate`, `Precinct_Base`, `Scoring`, `Overlap_AD12_SD2`, and `QA_Checks`.
-2. **CSV Artifacts**:
-   - `outputs/mprec_aggregate.csv`
-   - `outputs/srprec_aggregate.csv`
-   - `outputs/precinct_base.csv`
-   - `outputs/scoring.csv`
-   - `outputs/overlap_ad12_sd2.csv`
-   - `outputs/qa_checks.csv`
-3. **QA Unmatched Data**:
-   - `outputs/unmatched_mprec.csv`
-   - `outputs/unmatched_srprec_city.csv`
-   - `outputs/unmatched_srprec_district.csv`
-4. **run.log**:
-   Execution log containing row count analysis, loaded files, matching metrics, and diagnostic warnings.
+When the script finishes, a new folder will magically appear in your project folder called `outputs`. Inside it, you will find your master deliverable: **`precinct_targeting_workbook.xlsx`** (along with raw `.csv` versions of every sheet for portability).
 
-## Overview of Scoring Logic
+### Important Tabs in your Excel Workbook:
 
-The `Priority_Score` evaluates precincts based on three normalized dimensions:
+| Tab Name | Purpose |
+|----------|---------|
+| **`Overlap_AD12_SD2`** | **Start here.** This tab contains only the precincts sitting squarely in both Assembly District 12 and Supervisorial District 2. They are pre-sorted from highest `Priority_Score` to lowest. These are the doors you want to knock first. |
+| **`Scoring`** | The complete scoring breakdown for *every* mapped precinct in the entire county/source file, not just the overlap. |
+| **`QA_Checks`** | A critical diagnostic tab. It tells you exactly how many voters were ingested and whether any MPREC/SRPREC relationships failed to map. |
+| **`Raw_Voter_Sample`** | A tiny 500-voter sample of the source data so you can verify the participation/party flags applied correctly. |
 
-1. **Turnout Gap (45% weight)**: Reflects total number of registered voters who did *not* vote in 2024. Indicates maximum upside potential.
-2. **Competitive Index (35% weight)**: A measure of the Democratic/voter balance. Precincts splitting votes close to 50/50 receive a higher score (1.0), while single-party dominant precincts rank lower (0.0).
-3. **Voter Count (20% weight)**: Rewards larger precincts for efficiency in contacting more total targetable doors.
+### How is the Priority Score Calculated?
+The `Priority_Score` ranks your precincts on three criteria. Higher scores are always better:
+- **45% - Turnout Gap:** We favor precincts with high numbers of non-voters (e.g. they missed 2024). They represent the highest upside.
+- **35% - Competitive Index:** We favor "toss-up" precincts that split 50/50 over heavily homogenous single-party districts where turnout impacts the ultimate margin less significantly.
+- **20% - Voter Density:** We favor larger precincts natively, maximizing the raw number of targetable voters on a single block to reduce transit times for canvassers.
 
-*See `score_precincts()` inside `main.py` for exact computation details.*
+### Did something go wrong?
+If the numbers look bizarre, look inside the `outputs/` folder for three special `.csv` files:
+- `unmatched_mprec.csv`
+- `unmatched_srprec_city.csv`
+- `unmatched_srprec_district.csv`
+
+If there are rows in these files, it signifies mapping blind spots (i.e. a voter lived in an MPREC that simply didn't exist in your crosswalk file linking it to an SRPREC). You can update your raw data and run the script over again anytime.
