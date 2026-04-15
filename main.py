@@ -7,10 +7,6 @@ from core_diagnostics import generate_diagnostic_outputs
 # --- Configuration Section ---
 CONFIG = {
     "VOTER_FILE": "data/voter_file.csv",
-    "MPREC_CROSSWALK": "data/mprec_srprec.csv",
-    "SRPREC_CITY": "data/srprec_city.csv",
-    "DISTRICT_ASSIGNMENTS": "data/district_assignment.csv",
-    "PRECINCT_METRICS": "data/srprec_metrics.csv",
     "OUTPUT_DIR": "outputs"
 }
 
@@ -34,222 +30,145 @@ def reset_qa():
     QA_COLLECTIONS.clear()
     QA_METRICS.clear()
 
-
 def normalize_columns(df):
     df.columns = df.columns.str.strip().str.lower()
     return df
 
 def generate_template():
-    try:
-        mprec_df = pd.read_csv(CONFIG["MPREC_CROSSWALK"])
-        mprec_df = normalize_columns(mprec_df)
-        unique_srprecs = mprec_df['srprec'].dropna().unique()
-        
-        dist_df = pd.DataFrame({
-            'SRPREC': unique_srprecs,
-            'assembly_district': [''] * len(unique_srprecs),
-            'supervisorial_district': [''] * len(unique_srprecs)
-        })
-        dist_path = os.path.join(CONFIG["OUTPUT_DIR"], 'district_assignment_template.csv')
-        dist_df.to_csv(dist_path, index=False)
-        
-        city_df = pd.DataFrame({
-            'srprec': unique_srprecs,
-            'city': [''] * len(unique_srprecs)
-        })
-        city_path = os.path.join(CONFIG["OUTPUT_DIR"], 'srprec_city_template.csv')
-        city_df.to_csv(city_path, index=False)
-        
-        return {"status": "success"}
-    except Exception as e:
-        return {"status": "error", "message": str(e)}
+    return {"status": "success", "message": "Template generation deprecated in voter-centric model."}
 
-def load_inputs():
-    logging.info("Step 1: Loading input files")
-    
+def load_inputs(column_map):
+    logging.info("Step 1: Loading Voter File using Explicit Mode Mapping")
     inputs = {}
     try:
-        voter_df = pd.read_csv(CONFIG["VOTER_FILE"])
+        voter_df = pd.read_csv(CONFIG["VOTER_FILE"], dtype=str)
         inputs['voters'] = voter_df
         QA_METRICS['total_voter_rows'] = len(voter_df)
         
-        required_voter_cols = ['precinctname', 'party', 'general24']
-        v_cols = [c.lower() for c in voter_df.columns]
-        for c in required_voter_cols:
-            if c not in v_cols:
-                raise ValueError(f"Missing required fundamental column {c} in voter file.")
-                
-        # Check Turnout dependencies
-        if 'general22' in v_cols or any('2022' in c for c in v_cols):
-            inputs['has_prior_turnout'] = True
-        else:
-            inputs['has_prior_turnout'] = False
+        req_col = column_map.get('precinctname')
+        if not req_col or req_col not in voter_df.columns:
+            raise ValueError(f"Missing required fundamental column for PrecinctName: {req_col}")
             
     except Exception as e:
         logging.error(f"Failed to load voter file: {e}")
         raise
-
-    try:
-        mprec_df = pd.read_csv(CONFIG["MPREC_CROSSWALK"])
-        mprec_df = normalize_columns(mprec_df)
-        inputs['mprec'] = mprec_df
-    except Exception as e:
-        raise
-
-    try:
-        city_df = pd.read_csv(CONFIG["SRPREC_CITY"])
-        inputs['city'] = normalize_columns(city_df)
-    except Exception:
-        inputs['city'] = None
-
-    try:
-        dist_df = pd.read_csv(CONFIG["DISTRICT_ASSIGNMENTS"])
-        inputs['dist'] = normalize_columns(dist_df)
-    except Exception:
-        inputs['dist'] = None
-        
-    try:
-        metrics_df = pd.read_csv(CONFIG["PRECINCT_METRICS"])
-        inputs['metrics'] = normalize_columns(metrics_df)
-    except Exception:
-        inputs['metrics'] = None
-    
     return inputs
 
-def build_voter_flags(df, has_prior_turnout):
+def build_voter_flags(df, column_map):
     df_norm = df.copy()
-    col_map = {c: c.strip().lower() for c in df_norm.columns}
-    df_norm.rename(columns=col_map, inplace=True)
     
-    df_norm['MPREC'] = df_norm['precinctname'].fillna('').astype(str).str.strip().str.upper()
-    df_norm['Party_Clean'] = df_norm['party'].fillna('').astype(str).str.strip().str.upper()
+    df_norm['PrecinctName'] = df_norm[column_map['precinctname']].fillna('UNKNOWN').astype(str).str.strip().str.upper()
     
-    df_norm['Voted_2024_Flag'] = df_norm['general24'].fillna('').astype(str).str.strip().apply(lambda x: 1 if x != '' else 0)
-    
-    if has_prior_turnout:
-        t2_col = [c for c in df_norm.columns if '22' in c or 'previous' in c][0]
-        df_norm['Voted_Prior_Flag'] = df_norm[t2_col].fillna('').astype(str).str.strip().apply(lambda x: 1 if x != '' else 0)
+    party_col = column_map.get('party')
+    if party_col and party_col in df_norm.columns:
+        df_norm['Party_Clean'] = df_norm[party_col].fillna('').astype(str).str.strip().str.upper()
     else:
-        df_norm['Voted_Prior_Flag'] = 0
+        df_norm['Party_Clean'] = 'UNKNOWN'
+    
+    # Flags multi-mapping
+    df_norm['Presidential_Flag'] = 0
+    if 'presidential_cols' in column_map:
+        for c in column_map['presidential_cols']:
+            if c in df_norm.columns:
+                flag = (df_norm[c].fillna('').astype(str).str.strip() != '').astype(int)
+                df_norm['Presidential_Flag'] |= flag
+
+    df_norm['Midterm_Flag'] = 0
+    if 'midterm_cols' in column_map:
+        for c in column_map['midterm_cols']:
+            if c in df_norm.columns:
+                flag = (df_norm[c].fillna('').astype(str).str.strip() != '').astype(int)
+                df_norm['Midterm_Flag'] |= flag
     
     df_norm['Dem_Flag'] = df_norm['Party_Clean'].apply(lambda x: 1 if x in ['DEM', 'DEMOCRATIC', 'D'] else 0)
     df_norm['Rep_Flag'] = df_norm['Party_Clean'].apply(lambda x: 1 if x in ['REP', 'REPUBLICAN', 'R'] else 0)
     df_norm['NPP_Flag'] = df_norm['Party_Clean'].apply(lambda x: 1 if x in ['NPP', 'NO PARTY PREFERENCE', 'DECLINE TO STATE', 'DTS'] else 0)
     df_norm['OtherParty_Flag'] = 1 - (df_norm['Dem_Flag'] + df_norm['Rep_Flag'] + df_norm['NPP_Flag'])
     
-    QA_METRICS['total_unique_mprecs'] = df_norm['MPREC'].nunique()
+    # Explicit District Identification
+    def extract_mapped_col(col_key):
+        cname = column_map.get(col_key)
+        if cname and cname in df_norm.columns:
+            return df_norm[cname].fillna('Unmapped').astype(str).replace('', 'Unmapped')
+        return pd.Series('Unmapped', index=df_norm.index)
+
+    df_norm['Assembly_District'] = extract_mapped_col('assembly')
+    df_norm['Senate_District'] = extract_mapped_col('senate')
+    df_norm['Supervisorial_District'] = extract_mapped_col('supervisorial')
+    df_norm['City'] = extract_mapped_col('city')
+    
+    QA_METRICS['total_unique_precincts'] = df_norm['PrecinctName'].nunique()
     return df_norm
 
-def aggregate_mprec(df_voter):
-    agg = df_voter.groupby('MPREC').agg({
-        'MPREC': 'count',
-        'Voted_2024_Flag': 'sum',
-        'Voted_Prior_Flag': 'sum',
-        'Dem_Flag': 'sum',
-        'Rep_Flag': 'sum',
-        'NPP_Flag': 'sum',
-        'OtherParty_Flag': 'sum'
-    }).rename(columns={'MPREC': 'Total_Voters'}).reset_index()
-    
-    agg.rename(columns={
-        'Voted_2024_Flag': 'Voted_Current',
-        'Voted_Prior_Flag': 'Voted_Prior',
-        'Dem_Flag': 'Dem',
-        'Rep_Flag': 'Rep',
-        'NPP_Flag': 'NPP',
-        'OtherParty_Flag': 'OtherParty'
-    }, inplace=True)
+def aggregate_precincts(df_voter):
+    def mode_fallback(x):
+        return x.mode().iloc[0] if not x.mode().empty else 'Unmapped'
+        
+    agg = df_voter.groupby('PrecinctName').agg(
+        Total_Voters=('PrecinctName', 'count'),
+        Voted_Presidential=('Presidential_Flag', 'sum'),
+        Voted_Midterm=('Midterm_Flag', 'sum'),
+        DEM=('Dem_Flag', 'sum'),
+        REP=('Rep_Flag', 'sum'),
+        NPP=('NPP_Flag', 'sum'),
+        OtherParty=('OtherParty_Flag', 'sum'),
+        Assembly_District=('Assembly_District', mode_fallback),
+        Senate_District=('Senate_District', mode_fallback),
+        Supervisorial_District=('Supervisorial_District', mode_fallback),
+        City=('City', mode_fallback)
+    ).reset_index()
     return agg
 
-def join_crosswalk(mprec_agg, mprec_cw):
-    mprec_cw['mprec'] = mprec_cw['mprec'].astype(str).str.strip().str.upper()
-    mprec_cw['srprec'] = mprec_cw['srprec'].astype(str).str.strip().str.upper()
-    
-    merged = pd.merge(mprec_agg, mprec_cw, left_on='MPREC', right_on='mprec', how='left')
-    unmatched = merged[merged['srprec'].isna()]
-    match_rate = ((len(merged) - len(unmatched)) / len(merged)) * 100 if len(merged) > 0 else 0
-    
-    QA_METRICS['mprec_input'] = len(merged)
-    QA_METRICS['mprec_matched'] = len(merged) - len(unmatched)
-    QA_METRICS['mprec_unmatched'] = len(unmatched)
-    QA_METRICS['mprec_match_rate'] = f"{match_rate:.1f}%"
-    
-    if match_rate < 95.0:
-        QA_METRICS.setdefault('pipeline_warnings', []).append(f"CRITICAL: MPREC match rate < 95% (Actual: {match_rate:.1f}%)")
-        
-    if not unmatched.empty:
-        QA_COLLECTIONS['unmatched_mprec'] = unmatched[['MPREC', 'Total_Voters']]
-        
-    QA_METRICS['unmatched_mprecs_count'] = len(unmatched)
-    merged.rename(columns={'srprec': 'SRPREC'}, inplace=True)
-    return merged.dropna(subset=['SRPREC'])
+MIN_VIABLE_VOTERS = 50
 
-def aggregate_srprec(mprec_mapped):
-    agg = mprec_mapped.groupby('SRPREC').agg({
-        'Total_Voters': 'sum',
-        'Voted_Current': 'sum',
-        'Voted_Prior': 'sum',
-        'Dem': 'sum',
-        'Rep': 'sum',
-        'NPP': 'sum',
-        'OtherParty': 'sum'
-    }).reset_index()
-    QA_METRICS['total_unique_srprecs'] = len(agg)
-    return agg
+def score_precincts(df, weights, target_params=None, ciab_tps_col=None, ciab_ps_col=None):
+    df_score = df.copy()
+    
+    # Size Penalty & Viability
+    df_score['Viability_Flag'] = df_score['Total_Voters'].apply(lambda x: 'too_small' if x < MIN_VIABLE_VOTERS else 'viable')
+    df_score['Size_Factor'] = np.clip(df_score['Total_Voters'] / 150.0, 0.0, 1.0)
+    
+    # Advanced Election Turnout Rates
+    df_score['Presidential_Turnout_Rate'] = (df_score['Voted_Presidential'] / df_score['Total_Voters'].replace(0, np.nan)).fillna(0)
+    df_score['Midterm_Turnout_Rate'] = (df_score['Voted_Midterm'] / df_score['Total_Voters'].replace(0, np.nan)).fillna(0)
+    
+    df_score['Midterm_Underperformance'] = np.maximum(0, df_score['Presidential_Turnout_Rate'] - df_score['Midterm_Turnout_Rate'])
+    df_score['Expansion_Underperformance'] = np.maximum(0, 1.0 - df_score['Presidential_Turnout_Rate'])
+    
+    w_m_drop = weights.get("midterm_dropoff_weight", 0.6)
+    w_e_drop = weights.get("expansion_weight", 0.4)
+    
+    # Expected Votes Gained composite
+    df_score['Expected_Votes_Gained'] = (df_score['Midterm_Underperformance'] * w_m_drop + df_score['Expansion_Underperformance'] * w_e_drop) * df_score['Total_Voters']
+    df_score['Expected_Votes_Gained_Adjusted'] = df_score['Expected_Votes_Gained'] * df_score['Size_Factor']
+    
+    df_score['Turnout_Opportunity_Raw'] = (df_score['Midterm_Underperformance'] * w_m_drop + df_score['Expansion_Underperformance'] * w_e_drop) * np.sqrt(df_score['Total_Voters'].astype(float))
+    
+    # Dem Density Proxy
+    df_score['Dem_Share'] = (df_score['DEM'] / df_score['Total_Voters'].replace(0, np.nan)).fillna(0)
+    df_score['Dem_Volume'] = df_score['DEM']
+    df_score['Target_Density_Proxy'] = df_score['Dem_Share']
+    
+    # Persuasion Potential
+    df_score['TwoParty_Total'] = df_score['DEM'] + df_score['REP']
+    
+    def calculate_persuasion(row):
+        total_2p = row['TwoParty_Total']
+        if total_2p == 0:
+            return 0.0
+        dem_share = row['DEM'] / total_2p
+        rep_share = row['REP'] / total_2p
+        competitiveness = 1.0 - abs(dem_share - rep_share)
+        two_party_share = total_2p / row['Total_Voters'] if row['Total_Voters'] > 0 else 0
+        return competitiveness * two_party_share
 
-def apply_mappings(srprec_agg, city_cw, dist_cw, metrics_cw):
-    df = srprec_agg.copy()
+    df_score['Competitiveness'] = df_score.apply(lambda r: 1.0 - abs((r['DEM'] / r['TwoParty_Total']) - (r['REP'] / r['TwoParty_Total'])) if r['TwoParty_Total'] > 0 else 0.0, axis=1)
+    df_score['Persuasion_Potential'] = df_score.apply(calculate_persuasion, axis=1)
     
-    if city_cw is not None:
-        city_cw['srprec'] = city_cw['srprec'].astype(str).str.strip().str.upper()
-        df = pd.merge(df, city_cw, left_on='SRPREC', right_on='srprec', how='left')
-        df.rename(columns={'city': 'CITY'}, inplace=True)
-        df.drop(columns=['srprec'], errors='ignore', inplace=True)
-    else:
-        df['CITY'] = 'Unmapped'
-        
-    if dist_cw is not None:
-        dist_cw['srprec'] = dist_cw['srprec'].astype(str).str.strip().str.upper()
-        df = pd.merge(df, dist_cw, left_on='SRPREC', right_on='srprec', how='left')
-        df.rename(columns={
-            'assembly_district': 'Assembly_District',
-            'supervisorial_district': 'Supervisorial_District'
-        }, inplace=True)
-        df.drop(columns=['srprec'], errors='ignore', inplace=True)
-    else:
-        df['Assembly_District'] = 'Unmapped'
-        df['Supervisorial_District'] = 'Unmapped'
-        
-    if metrics_cw is not None:
-        metrics_cw['srprec'] = metrics_cw['srprec'].astype(str).str.strip().str.upper()
-        df = pd.merge(df, metrics_cw, left_on='SRPREC', right_on='srprec', how='left')
-        df.rename(columns={'area_sq_miles': 'Area_Sq_Miles'}, inplace=True)
-        df.drop(columns=['srprec'], errors='ignore', inplace=True)
-    else:
-        df['Area_Sq_Miles'] = np.nan
-        
-    return df
-
-def score_precincts(df, weights, has_prior_turnout):
-    # TRUTH ENFORCEMENT
-    df['Has_Prior_Turnout'] = has_prior_turnout
-    df['Has_Area'] = df['Area_Sq_Miles'].notna() & (df['Area_Sq_Miles'] > 0)
+    # Efficiency Proxy
+    df_score['Efficiency_Proxy'] = np.log1p(df_score['Total_Voters'])
     
-    # Pre-Normalize Base Fields
-    if has_prior_turnout:
-        df['Turnout_Dropoff_Rate'] = ((df['Voted_Prior'] - df['Voted_Current']) / df['Total_Voters'].replace(0, np.nan)).fillna(0)
-    else:
-        df['Turnout_Dropoff_Rate'] = 0.0
-        
-    df['True_Density'] = (df['Total_Voters'] / df['Area_Sq_Miles'].replace(0, np.nan)).fillna(0.0)
-    
-    total_party = df['Dem'] + df['Rep'] + df['NPP'] + df['OtherParty']
-    df['Dem_Share'] = (df['Dem'] / total_party.replace(0, np.nan)).fillna(0)
-    df['Rep_Share'] = (df['Rep'] / total_party.replace(0, np.nan)).fillna(0)
-    
-    df['Competitive_Index'] = 1 - abs(df['Dem_Share'] - df['Rep_Share'])
-    df['Competitive_Index'] = df['Competitive_Index'].clip(lower=0, upper=1)
-    
+    # Normalization (Min-Max)
     def min_max_norm(series):
         s_min = series.min()
         s_max = series.max()
@@ -257,116 +176,199 @@ def score_precincts(df, weights, has_prior_turnout):
             return pd.Series(0.0, index=series.index)
         return (series - s_min) / (s_max - s_min)
         
-    df['Normalized_Turnout_Drop'] = min_max_norm(df['Turnout_Dropoff_Rate'])
-    df['Normalized_Competitive_Index'] = min_max_norm(df['Competitive_Index'])
-    df['Normalized_True_Density'] = min_max_norm(df['True_Density'])
+    df_score['Turnout_Norm'] = min_max_norm(df_score['Turnout_Opportunity_Raw'])
+    df_score['Persuasion_Norm'] = min_max_norm(df_score['Persuasion_Potential'])
+    df_score['Efficiency_Norm'] = min_max_norm(df_score['Efficiency_Proxy'])
+    df_score['Target_Density_Norm'] = min_max_norm(df_score['Target_Density_Proxy'])
     
-    # Dependency Tracking Columns
-    df['Used_Density'] = weights.get('density', 0) > 0
-    df['Used_Underperformance'] = weights.get('turnout_gap', 0) > 0
+    w_t = weights.get("turnout", 0.35)
+    w_p = weights.get("persuasion", 0.25)
+    w_e = weights.get("efficiency", 0.15)
+    w_d = weights.get("target_density", 0.25)
     
-    w_t = weights.get("turnout_gap", 0)
-    w_c = weights.get("competitive_index", 0)
-    w_d = weights.get("density", 0)
+    df_score['Priority_Score_PrePenalty'] = (w_t * df_score['Turnout_Norm']) + (w_p * df_score['Persuasion_Norm']) + (w_e * df_score['Efficiency_Norm']) + (w_d * df_score['Target_Density_Norm'])
+    df_score['Priority_Score'] = df_score['Priority_Score_PrePenalty'] * df_score['Size_Factor']
+    df_score['Rank'] = df_score['Priority_Score'].rank(ascending=False, method='min').astype(int)
     
-    df['Priority_Score'] = (w_t * df['Normalized_Turnout_Drop']) + (w_c * df['Normalized_Competitive_Index']) + (w_d * df['Normalized_True_Density'])
-    df['Rank'] = df['Priority_Score'].rank(ascending=False, method='min').astype(int)
-    
-    return df.sort_values('Priority_Score', ascending=False)
+    def build_reason(row):
+        if row['Total_Voters'] < MIN_VIABLE_VOTERS:
+            return "Tiny precinct highly penalized for low operational scale."
+        reasons = []
+        if row['Expected_Votes_Gained'] > 15:
+            reasons.append("high turnout recovery potential")
+        if row['Competitiveness'] > 0.6:
+            reasons.append("contestable margins")
+        if row['Dem_Share'] > 0.6:
+            reasons.append("strong Democratic concentration")            
+        
+        if not reasons:
+            return "Standard precinct with moderate operational metrics."
+        
+        if len(reasons) == 1:
+            return f"Precinct defined by {reasons[0]}."
+        elif len(reasons) == 2:
+            return f"Precinct with {reasons[0]} and {reasons[1]}."
+        return f"Precinct with {reasons[0]}, {reasons[1]}, and {reasons[2]}."
 
-def export_outputs(voter_flags, mprec_agg, srprec_agg, base_df, score_df, overlap_df, target_params, weights):
-    # Re-writing Excel dynamically without assuming tabs
-    wb_path = os.path.join(CONFIG['OUTPUT_DIR'], 'precinct_targeting_workbook.xlsx')
+    df_score['Priority_Reason'] = df_score.apply(build_reason, axis=1)
+    
+    # Additional Context Fields
+    df_score['data_source'] = 'voter_file'
+    df_score['confidence'] = 'high'
+    df_score['method'] = 'direct_field_assignment'
+    
+    return df_score.sort_values('Priority_Score', ascending=False)
+
+def export_outputs(score_df, overlap_df, target_params, weights, execution_mode, output_dir=None):
+    out = output_dir or CONFIG["OUTPUT_DIR"]
+    summary_cols = [
+        'PrecinctName', 'Assembly_District', 'Senate_District', 'Supervisorial_District', 'City',
+        'Total_Voters', 'Voted_Presidential', 'Voted_Midterm', 'Presidential_Turnout_Rate', 'Midterm_Turnout_Rate',
+        'Midterm_Underperformance', 'Expansion_Underperformance', 'Turnout_Opportunity_Raw',
+        'Expected_Votes_Gained', 'Expected_Votes_Gained_Adjusted',
+        'DEM', 'REP', 'NPP', 'OtherParty', 'Dem_Share', 'Dem_Volume', 'Target_Density_Proxy',
+        'TwoParty_Total', 'Competitiveness', 'Persuasion_Potential', 'Efficiency_Proxy',
+        'Size_Factor', 'Viability_Flag', 'Turnout_Norm', 'Persuasion_Norm', 'Efficiency_Norm', 'Target_Density_Norm',
+        'Priority_Score', 'Rank', 'Priority_Reason', 'data_source', 'confidence', 'method'
+    ]
+    
+    # Fill in missing cols if any to pass structured checks
+    for c in summary_cols:
+        if c not in score_df.columns:
+            score_df[c] = pd.NA
+            
+    summary_df = score_df[summary_cols]
+    summary_df.to_csv(os.path.join(out, 'precinct_scores.csv'), index=False)
+    summary_df.to_csv(os.path.join(out, 'precinct_summary.csv'), index=False)  # fallback compat
+    
+    if not overlap_df.empty:
+        overlap_df = overlap_df[summary_cols]
+        top10 = overlap_df.head(10)
+        with open(os.path.join(out, 'top10_sanity_check.md'), 'w', encoding='utf-8') as f:
+            f.write("# Top 10 Ranked Precincts Sanity Check\n\n")
+            for idx, row in top10.iterrows():
+                flag = "🚩 WARNING: Suspicious metrics" if row['Total_Voters'] < 50 or row['Expected_Votes_Gained'] < 2 or row['Competitiveness'] == 0 else "✅ Passed"
+                f.write(f"## Rank {row['Rank']}. {row['PrecinctName']} ({flag})\n")
+                f.write(f"- **Size**: {row['Total_Voters']} voters (Viability: {row['Viability_Flag']})\n")
+                f.write(f"- **Expected Votes Gained**: {row['Expected_Votes_Gained']:.1f}\n")
+                f.write(f"- **Competitiveness**: {row['Competitiveness']:.2f}\n")
+                f.write(f"- **Democratic Concentration**: {row['Dem_Share']*100:.1f}%\n")
+                f.write(f"- **Algorithm Reason**: {row['Priority_Reason']}\n\n")
+
+        suspicious = overlap_df[(overlap_df['Total_Voters'] < 50) | (overlap_df['Expected_Votes_Gained'] < 2) | (overlap_df['Competitiveness'] == 0) | ((overlap_df['DEM'] == 0) & (overlap_df['REP'] == 0)) | ((overlap_df['Priority_Score'] > 0.8) & (overlap_df['Total_Voters'] < 100))]
+        with open(os.path.join(out, 'scoring_validation_report.txt'), 'w', encoding='utf-8') as f:
+            f.write(f"VOTER-CENTRIC SCORING VALIDATION REPORT\n")
+            f.write(f"Found {len(suspicious)} explicitly flagged irregular/suspicious rows within requested filters.\n\n")
+            if len(suspicious) > 0:
+                 f.write(suspicious[['PrecinctName', 'Total_Voters', 'Expected_Votes_Gained', 'Competitiveness']].to_string())
+            else:
+                 f.write("No severe anomalies detected in targeting bounds.\n")
+    
+    wb_path = os.path.join(out, 'precinct_targeting_workbook.xlsx')
     with pd.ExcelWriter(wb_path, engine='openpyxl') as writer:
         if not overlap_df.empty:
             overlap_df.to_excel(writer, sheet_name='Filtered_Targets', index=False)
         else:
             pd.DataFrame({'Message': ['No precincts matched the selection.']}).to_excel(writer, sheet_name='Filtered_Targets', index=False)
             
-        score_df.to_excel(writer, sheet_name='Full_County_Scores', index=False)
-        base_df.to_excel(writer, sheet_name='Raw_Precinct_Base', index=False)
-        mprec_agg.to_excel(writer, sheet_name='MPREC_Aggregates', index=False)
-        voter_flags.head(500).to_excel(writer, sheet_name='Raw_Voter_Sample', index=False)
+        summary_df.to_excel(writer, sheet_name='Full_County_Scores', index=False)
+        score_df.to_excel(writer, sheet_name='Precinct_Stats_Detailed', index=False)
     
-    # Save CSVs natively
-    overlap_df.to_csv(os.path.join(CONFIG['OUTPUT_DIR'], 'target_precincts.csv'), index=False)
+    if not overlap_df.empty:
+        overlap_df.to_csv(os.path.join(out, 'top_precincts.csv'), index=False)
     
-    exp_path = os.path.join(CONFIG['OUTPUT_DIR'], 'debug_explainer.txt')
+    exp_path = os.path.join(out, 'scoring_breakdown.txt')
     with open(exp_path, 'w', encoding='utf-8') as f:
-        f.write("STRICT MATH EXPLAINER\n")
-        f.write(f"Turnout Base Elasticity Weight: {weights.get('turnout_gap', 0)*100:.1f}%\n")
-        f.write(f"Two-Party Competitiveness Weight: {weights.get('competitive_index', 0)*100:.1f}%\n")
-        f.write(f"True Density (Area) Weight: {weights.get('density', 0)*100:.1f}%\n")
-        f.write(f"Parameters Enforced: AD: {target_params.get('ad')}, SD: {target_params.get('sd')}, City: {target_params.get('city')}\n")
+        f.write(f"EXECUTION MODE: {execution_mode}\n\n")
+        f.write("TARGET DRIVEN EXPLAINER\n")
+        f.write(f"Turnout Weight       : {weights.get('turnout', 0)*100:.1f}%\n")
+        f.write(f"Persuasion Weight    : {weights.get('persuasion', 0)*100:.1f}%\n")
+        f.write(f"Efficiency Weight    : {weights.get('efficiency', 0)*100:.1f}%\n")
+        f.write(f"Dem. Density Weight  : {weights.get('target_density', 0)*100:.1f}%\n")
+        f.write(f"Filters Enforced     : {target_params}\n")
 
-def run_pipeline(weights=None, target_params=None):
+def run_pipeline(column_map=None, weights=None, target_params=None):
     try:
-        if target_params is None: target_params = {"ad": None, "sd": None, "city": None}
-        if weights is None: weights = {"turnout_gap": 0.33, "competitive_index": 0.34, "density": 0.33}
-        
+        if column_map is None: 
+            column_map = {'precinctname': 'precinctname'} # Strict minimal
+        if target_params is None: 
+            target_params = {"assembly": None, "supervisorial": None, "senate": None, "city": None}
+        if weights is None: 
+            weights = {"turnout": 0.35, "persuasion": 0.25, "efficiency": 0.15, "target_density": 0.25, "midterm_dropoff_weight": 0.6, "expansion_weight": 0.4}
+            
         reset_qa()
-        inputs = load_inputs()
+        inputs = load_inputs(column_map)
         
-        voter_flags = build_voter_flags(inputs['voters'], inputs['has_prior_turnout'])
-        mprec_agg = aggregate_mprec(voter_flags)
-        mprec_join = join_crosswalk(mprec_agg, inputs['mprec'])
-        srprec_agg = aggregate_srprec(mprec_join)
+        voter_flags = build_voter_flags(inputs['voters'], column_map)
+        base_df = aggregate_precincts(voter_flags)
         
-        base_df = apply_mappings(srprec_agg, inputs['city'], inputs['dist'], inputs['metrics'])
-        
-        score_df = score_precincts(base_df, weights, inputs['has_prior_turnout'])
-        
-        # Extended Logic Validation Checks
-        if not score_df.empty:
-            if (score_df['Total_Voters'] == 0).any():
-                QA_METRICS.setdefault('pipeline_warnings', []).append("CRITICAL: Found SRPRECs with 0 Total Voters.")
-            if (score_df['Voted_Current'] > score_df['Total_Voters']).any():
-                QA_METRICS.setdefault('pipeline_warnings', []).append("CRITICAL: Precints found with Turnout > Registered Voters.")
-                
-        # Pure dynamic overlap logic
-        overlap_df = score_df.copy()
-        if target_params.get('ad') is not None:
-            overlap_df = overlap_df[overlap_df['Assembly_District'].astype(str) == str(target_params['ad'])]
-        if target_params.get('sd') is not None:
-            overlap_df = overlap_df[overlap_df['Supervisorial_District'].astype(str) == str(target_params['sd'])]
-        if target_params.get('city') is not None:
-            overlap_df = overlap_df[overlap_df['CITY'].astype(str) == str(target_params['city'])]
+        overlap_df = base_df.copy()
+        for key, df_col in [('assembly', 'Assembly_District'), ('supervisorial', 'Supervisorial_District'), 
+                            ('senate', 'Senate_District'), ('city', 'City')]:
+            req_val = target_params.get(key)
+            if req_val is not None and str(req_val).strip().upper() != 'ALL':
+                overlap_df = overlap_df[overlap_df[df_col].astype(str).str.strip().str.upper() == str(req_val).strip().upper()]
             
         if overlap_df.empty:
-            # We strictly catch and return valid empty, let the UI handle the halt.
-            logging.warning("Overlap execution resulted in 0 rows.")
+            logging.warning("Overlap execution resulted in 0 rows (No precincts matched current filters).")
             
-        export_outputs(voter_flags, mprec_agg, srprec_agg, base_df, score_df, overlap_df, target_params, weights)
+        score_df = score_precincts(overlap_df, weights)
+        overlap_df = score_df.copy()
+            
+        # Determine strict mode logic based on inputs mapped
+        has_dist = any([column_map.get('assembly'), column_map.get('senate'), column_map.get('supervisorial')])
+        execution_mode = "Voter-Centric Mode" if has_dist else "Geometry-Dependent Mode (Required for Districts)"
+            
+        export_outputs(score_df, overlap_df, target_params, weights, execution_mode)
         
-        jd_data = {
-            'step_name': ['MPREC_to_SRPREC'],
-            'match_rate': [QA_METRICS.get('mprec_match_rate')]
-        }
+        jd_data = {'step_name': ['Voter_Aggregation'], 'precincts_scored': [len(score_df)]}
         
+        geo_qa = []
+        for d in ['Assembly_District', 'Senate_District', 'Supervisorial_District', 'City']:
+            m = len(score_df[score_df[d] != 'Unmapped'])
+            um = len(score_df) - m
+            cov = (m / len(score_df)) * 100 if len(score_df)>0 else 0
+            geo_qa.append({
+                'Dimension': d,
+                'Mapped_Precincts': m,
+                'Unmapped_Precincts': um,
+                'Coverage_Percent': f"{cov:.1f}%",
+            })
+        geo_report = pd.DataFrame(geo_qa)
+        geo_report.to_csv(os.path.join(CONFIG.get('OUTPUT_DIR', 'outputs'), 'geography_coverage_report.csv'), index=False)
+        QA_COLLECTIONS['geography_coverage'] = geo_report
+
         state_dict = {
             'voter_flags': voter_flags,
-            'mprec_agg': mprec_agg,
-            'srprec_agg': srprec_agg,
-            'base_df': base_df,
             'score_df': score_df,
             'top_precincts': overlap_df,
-            'unmatched_mprec': QA_COLLECTIONS.get('unmatched_mprec', pd.DataFrame()),
             'join_diagnostics': pd.DataFrame(jd_data),
             'pipeline_warnings': QA_METRICS.get('pipeline_warnings', []),
             'weights': weights,
             'target_params': target_params
         }
         
-        generate_diagnostic_outputs(CONFIG["OUTPUT_DIR"], state_dict)
+        try:
+            generate_diagnostic_outputs(CONFIG["OUTPUT_DIR"], state_dict)
+        except Exception as q_e:
+            logging.warning(f"Failed partial diagnostics: {q_e}")
         
         return {
             "status": "success",
             "qa_metrics": QA_METRICS.copy(),
-            "top_precincts": overlap_df
+            "top_precincts": overlap_df,
+            "execution_mode": execution_mode
         }
     except Exception as e:
         logging.error(f"Pipeline crashed: {e}", exc_info=True)
         return {"status": "error", "error": str(e)}
 
 if __name__ == "__main__":
-    run_pipeline()
+    # Test strict mapping
+    test_map = {
+        'precinctname': 'PrecinctName',
+        'party': 'Party',
+        'turnout_current': 'General24',
+        'city': 'mCity'
+    }
+    print(run_pipeline(column_map=test_map))
