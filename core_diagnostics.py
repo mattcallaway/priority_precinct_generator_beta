@@ -42,14 +42,23 @@ def generate_diagnostic_outputs(outputs_dir, state_dict):
 
     # 05
     try:
-        d_cols = [c for c in base_df.columns if c in ['SRPREC', 'CITY', 'Assembly_District', 'Supervisorial_District', 'Area_Sq_Miles']]
+        d_cols = [c for c in base_df.columns if c in [
+            'SRPREC', 'CITY', 'City_Source', 
+            'Assembly_District', 'Assembly_District_Source', 
+            'Senate_District', 'Senate_District_Source', 
+            'Supervisorial_District', 'Supervisorial_District_Source', 'Supervisorial_District_Confidence', 
+            'Area_Sq_Miles'
+        ]]
         base_df[d_cols].to_csv(os.path.join(run_dir, "05_srprec_with_districts.csv"), index=False)
     except: pass
 
     # 07
     try:
-        s_cols = ['SRPREC', 'CITY', 'Assembly_District', 'Supervisorial_District', 'Total_Voters', 
-                  'Voted_Current', 'Turnout_Dropoff_Rate', 'Dem', 'Rep', 'NPP', 'Dem_Share', 'Competitive_Index', 
+        s_cols = ['SRPREC', 'CITY', 'City_Source', 
+                  'Assembly_District', 'Assembly_District_Source', 
+                  'Senate_District', 'Senate_District_Source', 
+                  'Supervisorial_District', 'Supervisorial_District_Source', 'Supervisorial_District_Confidence', 
+                  'Total_Voters', 'Voted_Current', 'Turnout_Dropoff_Rate', 'Dem', 'Rep', 'NPP', 'Dem_Share', 'Competitive_Index', 
                   'Area_Sq_Miles', 'True_Density', 'Normalized_Turnout_Drop', 'Normalized_Competitive_Index', 
                   'Normalized_True_Density', 'Used_Density', 'Used_Underperformance', 'Priority_Score', 'Rank']
         s_cols = [c for c in s_cols if c in score_df.columns]

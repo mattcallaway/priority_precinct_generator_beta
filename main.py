@@ -14,6 +14,12 @@ CONFIG = {
     "OUTPUT_DIR": "outputs"
 }
 
+COUNTY_RULES = {
+    "Sonoma": {
+        "supervisorial_from_precinct_prefix": True
+    }
+}
+
 os.makedirs(CONFIG["OUTPUT_DIR"], exist_ok=True)
 
 logging.basicConfig(
@@ -33,7 +39,6 @@ def reset_qa():
     global QA_COLLECTIONS, QA_METRICS
     QA_COLLECTIONS.clear()
     QA_METRICS.clear()
-
 
 def normalize_columns(df):
     df.columns = df.columns.str.strip().str.lower()
@@ -64,7 +69,166 @@ def generate_template():
     except Exception as e:
         return {"status": "error", "message": str(e)}
 
-def load_inputs():
+def is_mock_district_file(df, file_path=""):
+    if df is None or df.empty:
+        return False
+    if "mock" in file_path.lower():
+        return False
+    first_col = df.columns[0]
+    try:
+        if df[first_col].astype(str).str.contains("SRPREC_").any():
+            return True
+    except:
+        pass
+    return False
+
+def is_sonoma_context(voter_file_path, city_df=None):
+    if "sonoma" in voter_file_path.lower():
+        return True
+    if city_df is not None and "county" in city_df.columns:
+        try:
+            if (city_df["county"] == 49).any() or (city_df["county"] == "49").any():
+                return True
+        except:
+            pass
+    return False
+
+def find_voter_geo_columns(df):
+    cols = {c.lower().strip(): c for c in df.columns}
+    
+    assembly_col = None
+    for c in ['assembly_district', 'assembly district', 'assembly', 'ad']:
+        if c in cols:
+            assembly_col = cols[c]
+            break
+            
+    senate_col = None
+    for c in ['senate_district', 'senate district', 'senate', 'sd_senate', 'sen']:
+        if c in cols:
+            senate_col = cols[c]
+            break
+            
+    supervisorial_col = None
+    for c in ['supervisorial_district', 'supervisorial district', 'supervisorial', 'supervisor', 'sup_dist', 'sd']:
+        if c in cols:
+            supervisorial_col = cols[c]
+            break
+            
+    city_col = None
+    for c in ['city', 'mcity', 'municipality']:
+        if c in cols:
+            city_col = cols[c]
+            break
+            
+    return {
+        'assembly': assembly_col,
+        'senate': senate_col,
+        'supervisorial': supervisorial_col,
+        'city': city_col
+    }
+
+def derive_sonoma_supervisorial(precinct_name):
+    if pd.isna(precinct_name):
+        return np.nan
+    p_str = str(precinct_name).strip()
+    if not p_str:
+        return np.nan
+    if len(p_str) == 7 and p_str.startswith('0'):
+        val = p_str[:2]
+    else:
+        val = p_str[0]
+    try:
+        return int(val)
+    except ValueError:
+        return np.nan
+
+def to_clean_district_str(val):
+    if pd.isna(val) or val == '' or str(val).strip() == '' or str(val).lower() == 'nan' or str(val).lower() == 'unmapped':
+        return 'Unmapped'
+    try:
+        f_val = float(val)
+        if f_val.is_integer():
+            return str(int(f_val))
+        return str(f_val)
+    except:
+        return str(val).strip()
+
+def generate_supervisorial_prefix_validation(voter_df, geo_cols, output_dir):
+    p_col = None
+    for c in voter_df.columns:
+        if c.lower().strip() == 'precinctname':
+            p_col = c
+            break
+    if not p_col:
+        raise KeyError("Could not find precinctname column in voter file.")
+        
+    unique_precincts = voter_df[p_col].dropna().apply(to_clean_district_str).astype(str).str.strip().unique()
+    
+    records = []
+    direct_col = geo_cols.get('supervisorial')
+    
+    direct_map = {}
+    if direct_col:
+        try:
+            mode_df = voter_df.groupby(p_col)[direct_col].agg(lambda x: x.mode().iloc[0] if not x.mode().empty else np.nan).dropna()
+            direct_map = mode_df.to_dict()
+        except Exception as e:
+            logging.error(f"Error computing direct supervisorial modes: {e}")
+            
+    for p in unique_precincts:
+        p_clean = p.strip()
+        derived = derive_sonoma_supervisorial(p_clean)
+        
+        direct_val = np.nan
+        if direct_col and p in direct_map:
+            try:
+                direct_val = int(float(direct_map[p]))
+            except:
+                direct_val = direct_map[p]
+                
+        match_status = "NO_DIRECT_FIELD"
+        if pd.notna(direct_val):
+            try:
+                if int(derived) == int(float(direct_val)):
+                    match_status = "MATCH"
+                else:
+                    match_status = "MISMATCH"
+            except:
+                match_status = "MISMATCH"
+                
+        records.append({
+            "PrecinctName": p,
+            "normalized_precinct": p_clean,
+            "derived_supervisorial_district": derived if pd.notna(derived) else "",
+            "direct_supervisorial_district_if_present": direct_val if pd.notna(direct_val) else "",
+            "match_status": match_status,
+            "source": "precinct_prefix_rule" if pd.notna(derived) else "unmapped",
+            "confidence": "high_sonoma_verified" if pd.notna(derived) else "unknown"
+        })
+        
+    report_df = pd.DataFrame(records)
+    report_path = os.path.join(output_dir, "supervisorial_prefix_validation.csv")
+    report_df.to_csv(report_path, index=False)
+    logging.info(f"Prefix validation report saved to {report_path}")
+    
+    total_checked = len(report_df)
+    compared_df = report_df[report_df['match_status'] != "NO_DIRECT_FIELD"]
+    mismatches = compared_df[compared_df['match_status'] == "MISMATCH"]
+    mismatch_count = len(mismatches)
+    
+    match_rate = 100.0
+    if len(compared_df) > 0:
+        match_rate = ((len(compared_df) - mismatch_count) / len(compared_df)) * 100
+        
+    return {
+        "total_checked": total_checked,
+        "compared_count": len(compared_df),
+        "match_rate": match_rate,
+        "mismatch_count": mismatch_count,
+        "sample_mismatches": mismatches.head(5).to_dict(orient='records')
+    }
+
+def load_inputs(allow_mock=False):
     logging.info("Step 1: Loading input files")
     
     inputs = {}
@@ -103,8 +267,21 @@ def load_inputs():
         inputs['city'] = None
 
     try:
-        dist_df = pd.read_csv(CONFIG["DISTRICT_ASSIGNMENTS"])
-        inputs['dist'] = normalize_columns(dist_df)
+        dist_path = CONFIG["DISTRICT_ASSIGNMENTS"]
+        if os.path.exists(dist_path):
+            dist_df = pd.read_csv(dist_path)
+            if not allow_mock and is_mock_district_file(dist_df, dist_path):
+                logging.warning("Mock district_assignment.csv detected. Ignoring for production scoring.")
+                inputs['dist'] = None
+            else:
+                inputs['dist'] = normalize_columns(dist_df)
+        else:
+            mock_path = dist_path.replace(".csv", ".mock.csv")
+            if allow_mock and os.path.exists(mock_path):
+                dist_df = pd.read_csv(mock_path)
+                inputs['dist'] = normalize_columns(dist_df)
+            else:
+                inputs['dist'] = None
     except Exception:
         inputs['dist'] = None
         
@@ -116,12 +293,12 @@ def load_inputs():
     
     return inputs
 
-def build_voter_flags(df, has_prior_turnout):
+def build_voter_flags(df, has_prior_turnout, geo_cols_lower, derive_sonoma_sd=False):
     df_norm = df.copy()
     col_map = {c: c.strip().lower() for c in df_norm.columns}
     df_norm.rename(columns=col_map, inplace=True)
     
-    df_norm['MPREC'] = df_norm['precinctname'].fillna('').astype(str).str.strip().str.upper()
+    df_norm['MPREC'] = df_norm['precinctname'].apply(to_clean_district_str).astype(str).str.strip().str.upper()
     df_norm['Party_Clean'] = df_norm['party'].fillna('').astype(str).str.strip().str.upper()
     
     df_norm['Voted_2024_Flag'] = df_norm['general24'].fillna('').astype(str).str.strip().apply(lambda x: 1 if x != '' else 0)
@@ -137,6 +314,35 @@ def build_voter_flags(df, has_prior_turnout):
     df_norm['NPP_Flag'] = df_norm['Party_Clean'].apply(lambda x: 1 if x in ['NPP', 'NO PARTY PREFERENCE', 'DECLINE TO STATE', 'DTS'] else 0)
     df_norm['OtherParty_Flag'] = 1 - (df_norm['Dem_Flag'] + df_norm['Rep_Flag'] + df_norm['NPP_Flag'])
     
+    # Voter-file direct geography mapping or rules
+    if geo_cols_lower.get('assembly'):
+        df_norm['v_assembly'] = df_norm[geo_cols_lower['assembly']].fillna('')
+    else:
+        df_norm['v_assembly'] = np.nan
+        
+    if geo_cols_lower.get('senate'):
+        df_norm['v_senate'] = df_norm[geo_cols_lower['senate']].fillna('')
+    else:
+        df_norm['v_senate'] = np.nan
+        
+    if geo_cols_lower.get('supervisorial'):
+        df_norm['v_supervisorial'] = df_norm[geo_cols_lower['supervisorial']]
+        df_norm['v_supervisorial_src'] = "voter_file_direct"
+        df_norm['v_supervisorial_conf'] = "high"
+    elif derive_sonoma_sd:
+        df_norm['v_supervisorial'] = df_norm['precinctname'].apply(derive_sonoma_supervisorial)
+        df_norm['v_supervisorial_src'] = "precinct_prefix_rule"
+        df_norm['v_supervisorial_conf'] = "high_sonoma_verified"
+    else:
+        df_norm['v_supervisorial'] = np.nan
+        df_norm['v_supervisorial_src'] = "unmapped"
+        df_norm['v_supervisorial_conf'] = "unknown"
+        
+    if geo_cols_lower.get('city'):
+        df_norm['v_city'] = df_norm[geo_cols_lower['city']].fillna('')
+    else:
+        df_norm['v_city'] = np.nan
+
     QA_METRICS['total_unique_mprecs'] = df_norm['MPREC'].nunique()
     return df_norm
 
@@ -148,7 +354,13 @@ def aggregate_mprec(df_voter):
         'Dem_Flag': 'sum',
         'Rep_Flag': 'sum',
         'NPP_Flag': 'sum',
-        'OtherParty_Flag': 'sum'
+        'OtherParty_Flag': 'sum',
+        'v_assembly': lambda x: x.dropna().iloc[0] if not x.dropna().empty else np.nan,
+        'v_senate': lambda x: x.dropna().iloc[0] if not x.dropna().empty else np.nan,
+        'v_supervisorial': lambda x: x.dropna().iloc[0] if not x.dropna().empty else np.nan,
+        'v_supervisorial_src': lambda x: x.dropna().iloc[0] if not x.dropna().empty else 'unmapped',
+        'v_supervisorial_conf': lambda x: x.dropna().iloc[0] if not x.dropna().empty else 'unknown',
+        'v_city': lambda x: x.dropna().iloc[0] if not x.dropna().empty else np.nan,
     }).rename(columns={'MPREC': 'Total_Voters'}).reset_index()
     
     agg.rename(columns={
@@ -162,8 +374,8 @@ def aggregate_mprec(df_voter):
     return agg
 
 def join_crosswalk(mprec_agg, mprec_cw):
-    mprec_cw['mprec'] = mprec_cw['mprec'].astype(str).str.strip().str.upper()
-    mprec_cw['srprec'] = mprec_cw['srprec'].astype(str).str.strip().str.upper()
+    mprec_cw['mprec'] = mprec_cw['mprec'].apply(to_clean_district_str).astype(str).str.strip().str.upper()
+    mprec_cw['srprec'] = mprec_cw['srprec'].apply(to_clean_district_str).astype(str).str.strip().str.upper()
     
     merged = pd.merge(mprec_agg, mprec_cw, left_on='MPREC', right_on='mprec', how='left')
     unmatched = merged[merged['srprec'].isna()]
@@ -192,7 +404,13 @@ def aggregate_srprec(mprec_mapped):
         'Dem': 'sum',
         'Rep': 'sum',
         'NPP': 'sum',
-        'OtherParty': 'sum'
+        'OtherParty': 'sum',
+        'v_assembly': lambda x: x.dropna().iloc[0] if not x.dropna().empty else np.nan,
+        'v_senate': lambda x: x.dropna().iloc[0] if not x.dropna().empty else np.nan,
+        'v_supervisorial': lambda x: x.dropna().iloc[0] if not x.dropna().empty else np.nan,
+        'v_supervisorial_src': lambda x: x.dropna().iloc[0] if not x.dropna().empty else 'unmapped',
+        'v_supervisorial_conf': lambda x: x.dropna().iloc[0] if not x.dropna().empty else 'unknown',
+        'v_city': lambda x: x.dropna().iloc[0] if not x.dropna().empty else np.nan,
     }).reset_index()
     QA_METRICS['total_unique_srprecs'] = len(agg)
     return agg
@@ -200,28 +418,62 @@ def aggregate_srprec(mprec_mapped):
 def apply_mappings(srprec_agg, city_cw, dist_cw, metrics_cw):
     df = srprec_agg.copy()
     
+    # 1. City Assignment
+    df['City_Source'] = df['v_city'].apply(lambda x: 'voter_file_direct' if pd.notna(x) and x != '' else 'unmapped')
     if city_cw is not None:
-        city_cw['srprec'] = city_cw['srprec'].astype(str).str.strip().str.upper()
+        city_cw['srprec'] = city_cw['srprec'].apply(to_clean_district_str).astype(str).str.strip().str.upper()
         df = pd.merge(df, city_cw, left_on='SRPREC', right_on='srprec', how='left')
-        df.rename(columns={'city': 'CITY'}, inplace=True)
-        df.drop(columns=['srprec'], errors='ignore', inplace=True)
+        df['city_ext'] = df['city']
+        df.drop(columns=['city', 'srprec'], errors='ignore', inplace=True)
     else:
-        df['CITY'] = 'Unmapped'
+        df['city_ext'] = np.nan
         
+    df['CITY'] = df['v_city'].fillna(df['city_ext']).fillna('Unmapped')
+    df.loc[(df['City_Source'] == 'unmapped') & df['city_ext'].notna(), 'City_Source'] = 'external_mapping'
+    df.drop(columns=['city_ext', 'v_city'], errors='ignore', inplace=True)
+    
+    # 2. Assembly District Assignment
+    df['Assembly_District_Source'] = df['v_assembly'].apply(lambda x: 'voter_file_direct' if pd.notna(x) and x != '' else 'unmapped')
     if dist_cw is not None:
-        dist_cw['srprec'] = dist_cw['srprec'].astype(str).str.strip().str.upper()
+        dist_cw['srprec'] = dist_cw['srprec'].apply(to_clean_district_str).astype(str).str.strip().str.upper()
         df = pd.merge(df, dist_cw, left_on='SRPREC', right_on='srprec', how='left')
-        df.rename(columns={
-            'assembly_district': 'Assembly_District',
-            'supervisorial_district': 'Supervisorial_District'
-        }, inplace=True)
+        df.rename(columns={'assembly_district': 'assembly_ext'}, inplace=True)
         df.drop(columns=['srprec'], errors='ignore', inplace=True)
     else:
-        df['Assembly_District'] = 'Unmapped'
-        df['Supervisorial_District'] = 'Unmapped'
+        df['assembly_ext'] = np.nan
         
+    df['Assembly_District'] = df['v_assembly'].fillna(df['assembly_ext'])
+    df['Assembly_District'] = df['Assembly_District'].apply(to_clean_district_str)
+    df.loc[(df['Assembly_District_Source'] == 'unmapped') & df['assembly_ext'].notna(), 'Assembly_District_Source'] = 'external_mapping'
+    df.drop(columns=['assembly_ext', 'v_assembly'], errors='ignore', inplace=True)
+    
+    # 3. Senate District Assignment
+    df['Senate_District_Source'] = df['v_senate'].apply(lambda x: 'voter_file_direct' if pd.notna(x) and x != '' else 'unmapped')
+    df['Senate_District'] = df['v_senate'].fillna('Unmapped')
+    df['Senate_District'] = df['Senate_District'].apply(to_clean_district_str)
+    df.drop(columns=['v_senate'], errors='ignore', inplace=True)
+    
+    # 4. Supervisorial District Assignment
+    if dist_cw is not None:
+        df.rename(columns={'supervisorial_district': 'supervisorial_ext'}, inplace=True)
+    else:
+        df['supervisorial_ext'] = np.nan
+        
+    df['Supervisorial_District'] = df['v_supervisorial'].fillna(df['supervisorial_ext'])
+    df['Supervisorial_District'] = df['Supervisorial_District'].apply(to_clean_district_str)
+    
+    df['Supervisorial_District_Source'] = df['v_supervisorial_src']
+    df['Supervisorial_District_Confidence'] = df['v_supervisorial_conf']
+    
+    external_mask = (df['Supervisorial_District_Source'] == 'unmapped') & df['supervisorial_ext'].notna()
+    df.loc[external_mask, 'Supervisorial_District_Source'] = 'external_mapping'
+    df.loc[external_mask, 'Supervisorial_District_Confidence'] = 'medium'
+    
+    df.drop(columns=['supervisorial_ext', 'v_supervisorial', 'v_supervisorial_src', 'v_supervisorial_conf'], errors='ignore', inplace=True)
+    
+    # 5. Metrics Assignment
     if metrics_cw is not None:
-        metrics_cw['srprec'] = metrics_cw['srprec'].astype(str).str.strip().str.upper()
+        metrics_cw['srprec'] = metrics_cw['srprec'].apply(to_clean_district_str).astype(str).str.strip().str.upper()
         df = pd.merge(df, metrics_cw, left_on='SRPREC', right_on='srprec', how='left')
         df.rename(columns={'area_sq_miles': 'Area_Sq_Miles'}, inplace=True)
         df.drop(columns=['srprec'], errors='ignore', inplace=True)
@@ -231,11 +483,9 @@ def apply_mappings(srprec_agg, city_cw, dist_cw, metrics_cw):
     return df
 
 def score_precincts(df, weights, has_prior_turnout):
-    # TRUTH ENFORCEMENT
     df['Has_Prior_Turnout'] = has_prior_turnout
     df['Has_Area'] = df['Area_Sq_Miles'].notna() & (df['Area_Sq_Miles'] > 0)
     
-    # Pre-Normalize Base Fields
     if has_prior_turnout:
         df['Turnout_Dropoff_Rate'] = ((df['Voted_Prior'] - df['Voted_Current']) / df['Total_Voters'].replace(0, np.nan)).fillna(0)
     else:
@@ -261,7 +511,6 @@ def score_precincts(df, weights, has_prior_turnout):
     df['Normalized_Competitive_Index'] = min_max_norm(df['Competitive_Index'])
     df['Normalized_True_Density'] = min_max_norm(df['True_Density'])
     
-    # Dependency Tracking Columns
     df['Used_Density'] = weights.get('density', 0) > 0
     df['Used_Underperformance'] = weights.get('turnout_gap', 0) > 0
     
@@ -275,7 +524,6 @@ def score_precincts(df, weights, has_prior_turnout):
     return df.sort_values('Priority_Score', ascending=False)
 
 def export_outputs(voter_flags, mprec_agg, srprec_agg, base_df, score_df, overlap_df, target_params, weights):
-    # Re-writing Excel dynamically without assuming tabs
     wb_path = os.path.join(CONFIG['OUTPUT_DIR'], 'precinct_targeting_workbook.xlsx')
     with pd.ExcelWriter(wb_path, engine='openpyxl') as writer:
         if not overlap_df.empty:
@@ -288,7 +536,6 @@ def export_outputs(voter_flags, mprec_agg, srprec_agg, base_df, score_df, overla
         mprec_agg.to_excel(writer, sheet_name='MPREC_Aggregates', index=False)
         voter_flags.head(500).to_excel(writer, sheet_name='Raw_Voter_Sample', index=False)
     
-    # Save CSVs natively
     overlap_df.to_csv(os.path.join(CONFIG['OUTPUT_DIR'], 'target_precincts.csv'), index=False)
     
     exp_path = os.path.join(CONFIG['OUTPUT_DIR'], 'debug_explainer.txt')
@@ -299,15 +546,35 @@ def export_outputs(voter_flags, mprec_agg, srprec_agg, base_df, score_df, overla
         f.write(f"True Density (Area) Weight: {weights.get('density', 0)*100:.1f}%\n")
         f.write(f"Parameters Enforced: AD: {target_params.get('ad')}, SD: {target_params.get('sd')}, City: {target_params.get('city')}\n")
 
-def run_pipeline(weights=None, target_params=None):
+def run_pipeline(weights=None, target_params=None, allow_mock=False, county="Sonoma", derive_sonoma_sd=None, contest_file_path=None, contest_prec_col=None, contest_influence_weight=0.20):
     try:
         if target_params is None: target_params = {"ad": None, "sd": None, "city": None}
         if weights is None: weights = {"turnout_gap": 0.33, "competitive_index": 0.34, "density": 0.33}
         
         reset_qa()
-        inputs = load_inputs()
+        inputs = load_inputs(allow_mock=allow_mock)
         
-        voter_flags = build_voter_flags(inputs['voters'], inputs['has_prior_turnout'])
+        voter_df = inputs['voters']
+        geo_cols = find_voter_geo_columns(voter_df)
+        geo_cols_lower = {k: v.lower() if v else None for k, v in geo_cols.items()}
+        
+        # Determine Sonoma prefix-derivation rules
+        is_sonoma = is_sonoma_context(CONFIG["VOTER_FILE"], inputs.get('city'))
+        derive_rule_enabled = False
+        if county in COUNTY_RULES and COUNTY_RULES[county].get("supervisorial_from_precinct_prefix"):
+            derive_rule_enabled = True
+        if derive_sonoma_sd is not None:
+            derive_rule_enabled = derive_sonoma_sd
+            
+        # Run prefix validation report
+        val_metrics = generate_supervisorial_prefix_validation(voter_df, geo_cols, CONFIG["OUTPUT_DIR"])
+        
+        if val_metrics["compared_count"] > 0 and val_metrics["match_rate"] < 98.0:
+            msg = f"WARNING: Prefix-derived Supervisorial District does not match direct voter-file field reliably (Match Rate: {val_metrics['match_rate']:.1f}%). Do not use without review."
+            QA_METRICS.setdefault('pipeline_warnings', []).append(msg)
+            logging.warning(msg)
+            
+        voter_flags = build_voter_flags(voter_df, inputs['has_prior_turnout'], geo_cols_lower, derive_rule_enabled)
         mprec_agg = aggregate_mprec(voter_flags)
         mprec_join = join_crosswalk(mprec_agg, inputs['mprec'])
         srprec_agg = aggregate_srprec(mprec_join)
@@ -316,12 +583,45 @@ def run_pipeline(weights=None, target_params=None):
         
         score_df = score_precincts(base_df, weights, inputs['has_prior_turnout'])
         
+        # Contest enrichment logic integration
+        has_contest = False
+        if contest_file_path and contest_prec_col and os.path.exists(contest_file_path):
+            from contest_manager import load_classification_config, run_enrichment_calculations, inspect_and_load_file
+            config = load_classification_config()
+            if config:
+                res_load = inspect_and_load_file(contest_file_path)
+                if res_load["status"] == "success":
+                    contest_df = res_load["df"]
+                    score_df = run_enrichment_calculations(
+                        score_df, 
+                        contest_df, 
+                        contest_prec_col, 
+                        config, 
+                        influence_weight=contest_influence_weight
+                    )
+                    has_contest = True
+                    
+        if not has_contest:
+            score_df["Base_Priority_Score"] = score_df["Priority_Score"]
+            score_df["Contest_Enrichment_Score"] = np.nan
+            score_df["Final_Priority_Score"] = score_df["Priority_Score"]
+            score_df["Contest_Support_Score"] = np.nan
+            score_df["Contest_Persuasion_Score"] = np.nan
+            score_df["Contest_Turnout_Score"] = np.nan
+            score_df["Contest_Issue_Alignment_Score"] = np.nan
+            score_df["Contest_Confidence"] = 0.0
+            score_df["Contest_Coverage_Flag"] = "No Coverage"
+            score_df["Contest_Source_Summary"] = "None"
+            score_df["Base_Rank"] = score_df["Rank"]
+            score_df["Final_Rank"] = score_df["Rank"]
+            score_df["Rank_Change"] = 0
+        
         # Extended Logic Validation Checks
         if not score_df.empty:
             if (score_df['Total_Voters'] == 0).any():
                 QA_METRICS.setdefault('pipeline_warnings', []).append("CRITICAL: Found SRPRECs with 0 Total Voters.")
             if (score_df['Voted_Current'] > score_df['Total_Voters']).any():
-                QA_METRICS.setdefault('pipeline_warnings', []).append("CRITICAL: Precints found with Turnout > Registered Voters.")
+                QA_METRICS.setdefault('pipeline_warnings', []).append("CRITICAL: Precincts found with Turnout > Registered Voters.")
                 
         # Pure dynamic overlap logic
         overlap_df = score_df.copy()
@@ -333,10 +633,28 @@ def run_pipeline(weights=None, target_params=None):
             overlap_df = overlap_df[overlap_df['CITY'].astype(str) == str(target_params['city'])]
             
         if overlap_df.empty:
-            # We strictly catch and return valid empty, let the UI handle the halt.
             logging.warning("Overlap execution resulted in 0 rows.")
             
         export_outputs(voter_flags, mprec_agg, srprec_agg, base_df, score_df, overlap_df, target_params, weights)
+        
+        geo_meta = {
+            "supervisorial": {
+                "source": base_df['Supervisorial_District_Source'].iloc[0] if not base_df.empty else "unmapped",
+                "confidence": base_df['Supervisorial_District_Confidence'].iloc[0] if not base_df.empty else "unknown"
+            },
+            "assembly": {
+                "source": base_df['Assembly_District_Source'].iloc[0] if not base_df.empty else "unmapped",
+                "confidence": "high" if not base_df.empty and base_df['Assembly_District_Source'].iloc[0] == "voter_file_direct" else ("medium" if not base_df.empty and base_df['Assembly_District_Source'].iloc[0] == "external_mapping" else "unknown")
+            },
+            "senate": {
+                "source": base_df['Senate_District_Source'].iloc[0] if not base_df.empty else "unmapped",
+                "confidence": "high" if not base_df.empty and base_df['Senate_District_Source'].iloc[0] == "voter_file_direct" else "unknown"
+            },
+            "city": {
+                "source": base_df['City_Source'].iloc[0] if not base_df.empty else "unmapped",
+                "confidence": "high" if not base_df.empty and base_df['City_Source'].iloc[0] == "voter_file_direct" else ("medium" if not base_df.empty and base_df['City_Source'].iloc[0] == "external_mapping" else "unknown")
+            }
+        }
         
         jd_data = {
             'step_name': ['MPREC_to_SRPREC'],
@@ -362,7 +680,8 @@ def run_pipeline(weights=None, target_params=None):
         return {
             "status": "success",
             "qa_metrics": QA_METRICS.copy(),
-            "top_precincts": overlap_df
+            "top_precincts": overlap_df,
+            "geo_sources": geo_meta
         }
     except Exception as e:
         logging.error(f"Pipeline crashed: {e}", exc_info=True)

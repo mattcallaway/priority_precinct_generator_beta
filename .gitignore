@@ -4,3 +4,5 @@ data/
 __pycache__/
 *.pyc
 run.log
+Untitled*.txt
+*.code-workspace

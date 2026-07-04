@@ -1,0 +1,15 @@
+<html>
+<head><title>Exported Report</title></head>
+<body>
+<table>
+  <tr>
+    <th>Precinct</th>
+    <th>Votes</th>
+  </tr>
+  <tr>
+    <td>400001</td>
+    <td>100</td>
+  </tr>
+</table>
+</body>
+</html>
