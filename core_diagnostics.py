@@ -22,18 +22,18 @@ def generate_diagnostic_outputs(outputs_dir, state_dict):
     
     # 01
     try:
-        sample_cols = ['MPREC', 'Party_Clean', 'Voted_2024_Flag', 'Voted_Prior_Flag', 'Dem_Flag', 'Rep_Flag', 'NPP_Flag']
+        sample_cols = ['PrecinctName', 'Party_Clean', 'Voted_2024_Flag', 'Voted_Prior_Flag', 'Dem_Flag', 'Rep_Flag', 'NPP_Flag']
         available_cols = [c for c in sample_cols if c in voter_flags.columns]
         voter_flags[available_cols].head(1000).to_csv(os.path.join(run_dir, "01_voter_flag_sample.csv"), index=False)
     except: pass
 
     # 02
-    try: mprec_agg.to_csv(os.path.join(run_dir, "02_mprec_aggregation.csv"), index=False)
+    try: mprec_agg.to_csv(os.path.join(run_dir, "02_precinct_aggregation.csv"), index=False)
     except: pass
 
     # 03
     try:
-        if not unmatched_mprec.empty: unmatched_mprec.to_csv(os.path.join(run_dir, "03_unmatched_mprec.csv"), index=False)
+        if not unmatched_mprec.empty: unmatched_mprec.to_csv(os.path.join(run_dir, "03_unmatched_precincts.csv"), index=False)
     except: pass
 
     # 04
@@ -43,24 +43,28 @@ def generate_diagnostic_outputs(outputs_dir, state_dict):
     # 05
     try:
         d_cols = [c for c in base_df.columns if c in [
-            'SRPREC', 'CITY', 'City_Source', 
+            'PrecinctName', 'CITY', 'CITY_Source', 
             'Assembly_District', 'Assembly_District_Source', 
             'Senate_District', 'Senate_District_Source', 
             'Supervisorial_District', 'Supervisorial_District_Source', 'Supervisorial_District_Confidence', 
             'Area_Sq_Miles'
         ]]
-        base_df[d_cols].to_csv(os.path.join(run_dir, "05_srprec_with_districts.csv"), index=False)
+        base_df[d_cols].to_csv(os.path.join(run_dir, "05_precinct_with_districts.csv"), index=False)
     except: pass
 
     # 07
     try:
-        s_cols = ['SRPREC', 'CITY', 'City_Source', 
+        s_cols = ['PrecinctName', 'CITY', 'CITY_Source', 
                   'Assembly_District', 'Assembly_District_Source', 
                   'Senate_District', 'Senate_District_Source', 
                   'Supervisorial_District', 'Supervisorial_District_Source', 'Supervisorial_District_Confidence', 
-                  'Total_Voters', 'Voted_Current', 'Turnout_Dropoff_Rate', 'Dem', 'Rep', 'NPP', 'Dem_Share', 'Competitive_Index', 
-                  'Area_Sq_Miles', 'True_Density', 'Normalized_Turnout_Drop', 'Normalized_Competitive_Index', 
-                  'Normalized_True_Density', 'Used_Density', 'Used_Underperformance', 'Priority_Score', 'Rank']
+                  'Total_Voters', 'Voted_Current', 'Prior_Turnout', 'Turnout_Dropoff', 'Turnout_Expansion',
+                  'Turnout_Volatility', 'Turnout_Opportunity_Raw', 'Expected_Votes_Gained', 'Expected_Votes_Gained_Adjusted',
+                  'Dem', 'Rep', 'NPP', 'Dem_Share', 'Rep_Share', 'NPP_Share', 'Other_Share', 'Partisan_Competitiveness',
+                  'Area_Sq_Miles', 'True_Area_Density', 'True_Area_Density_Source', 'Operational_Scale_Proxy', 
+                  'Operational_Scale_Score', 'True_Area_Density_Score', 'Density_Component',
+                  'Base_Priority_Score', 'Final_Priority_Score', 'Base_Rank', 'Final_Rank', 'Rank_Change',
+                  'Voter_Concentration_Proxy_Deprecated']
         s_cols = [c for c in s_cols if c in score_df.columns]
         score_df[s_cols].to_csv(os.path.join(run_dir, "07_scoring_breakdown.csv"), index=False)
     except Exception as e: logging.error(e)
@@ -68,10 +72,10 @@ def generate_diagnostic_outputs(outputs_dir, state_dict):
     # 08
     try:
         if not score_df.empty:
-            score_df.sort_values("Priority_Score", ascending=False).head(50).to_csv(os.path.join(run_dir, "08_top_50_precincts.csv"), index=False)
+            score_df.sort_values("Base_Priority_Score", ascending=False).head(50).to_csv(os.path.join(run_dir, "08_top_50_precincts.csv"), index=False)
     except: pass
 
-    # 09 (Dynamically parameterized naming instead of hardcoded)
+    # 09
     try:
         top_precincts.to_csv(os.path.join(run_dir, "09_target_overlap.csv"), index=False)
     except: pass
