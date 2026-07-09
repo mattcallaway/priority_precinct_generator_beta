@@ -22,6 +22,14 @@ def run_tests():
     print("==================================\n")
     failures = 0
 
+    crosswalk_path = "outputs/precinct_crosswalk/canonical_sov_to_voter_precinct_crosswalk.csv"
+    if os.path.exists(crosswalk_path):
+        try:
+            os.remove(crosswalk_path)
+        except:
+            pass
+
+
     try:
         # Test 1
         print("TEST 1: Truth-Enforced Impossible Overlaps...")
