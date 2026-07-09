@@ -536,12 +536,103 @@ def run_enrichment_calculations(base_scored_df, contest_df, contest_prec_col, co
     os.makedirs(output_dir, exist_ok=True)
     
     df_base = base_scored_df.copy()
-    df_base['PrecinctName_JOIN'] = df_base['PrecinctName'].apply(lambda x: str(x).strip().upper())
     
+    # Self-healing build_canonical_crosswalk if not present
+    crosswalk_path = "outputs/precinct_crosswalk/canonical_sov_to_voter_precinct_crosswalk.csv"
+    if not os.path.exists(crosswalk_path):
+        if os.path.exists(r"D:\Downloads\ewmr010_regabsvotpctxref_2026-06-02.pdf") and os.path.exists(r"D:\Downloads\ewmr008_votabsregpctxref_2026-06-02.pdf"):
+            try:
+                import sys
+                project_root = os.path.dirname(os.path.abspath(__file__))
+                if project_root not in sys.path:
+                    sys.path.insert(0, project_root)
+                from scratch.build_precinct_crosswalk import build_canonical_crosswalk
+                build_canonical_crosswalk()
+            except Exception as e:
+                print(f"Self-healing crosswalk build failed: {e}")
+
+    # Load crosswalk mapping
+    cross_map = {}
+    if os.path.exists(crosswalk_path):
+        try:
+            df_cross = pd.read_csv(crosswalk_path)
+            for _, r in df_cross.iterrows():
+                vp = str(r.get("Voter_PrecinctName", "")).strip()
+                if vp.endswith(".0"):
+                    vp = vp[:-2]
+                if vp:
+                    # Keep row in cross_map
+                    cross_map[vp.upper()] = r
+        except Exception as e:
+            print(f"Failed to load crosswalk: {e}")
+
+    # Normalize contest precincts
     df_contest = contest_df.copy()
-    voter_precincts = base_scored_df['PrecinctName'].dropna().tolist()
-    normalized_precs = normalize_contest_precincts(df_contest, contest_prec_col, voter_precincts, county=county, output_dir=output_dir)
-    df_contest['PREC_JOIN'] = [str(x).strip().upper() for x in normalized_precs]
+    # Normalize PREC_JOIN as padded SOV precinct name
+    df_contest['PREC_JOIN'] = df_contest[contest_prec_col].apply(lambda x: str(x).strip().zfill(7) if str(x).strip().isdigit() else str(x).strip().upper())
+    
+    # Map voter precincts in base to Voting Precinct using crosswalk
+    prec_joins = []
+    enrich_sources = []
+    enrich_confidences = []
+    prec_sources = []
+    prec_assigned = []
+    cross_src_files = []
+    cross_match_rules = []
+    cross_otm_flags = []
+    result_inherited = []
+    
+    for idx, row in df_base.iterrows():
+        pname = str(row.get("PrecinctName", "")).strip()
+        if pname.endswith(".0"):
+            pname = pname[:-2]
+        pname_upper = pname.upper()
+        
+        xref_row = cross_map.get(pname_upper)
+        if xref_row is not None and str(xref_row.get("Valid_For_Production", "")).upper() == "TRUE":
+            voting_p = str(xref_row.get("Voting_Precinct", "")).strip()
+            prec_joins.append(voting_p.upper())
+            
+            rule = str(xref_row.get("Match_Rule", ""))
+            cross_match_rules.append(rule)
+            
+            if rule == "exact_match":
+                enrich_sources.append("exact_precinct_match")
+                result_inherited.append(False)
+            else:
+                enrich_sources.append("official_crosswalk_inherited")
+                result_inherited.append(True)
+                
+            enrich_confidences.append("high")
+            prec_sources.append(os.path.basename(contest_file_path) if contest_file_path else "detail.csv")
+            prec_assigned.append(voting_p)
+            cross_src_files.append("ewmr010_regabsvotpctxref_2026-06-02.pdf / ewmr008_votabsregpctxref_2026-06-02.pdf")
+            cross_otm_flags.append(str(xref_row.get("One_To_Many_Flag", "NO")))
+        else:
+            # Fall back to exact padded match
+            p_padded = pname.zfill(7)
+            if p_padded.upper() in df_contest['PREC_JOIN'].unique():
+                prec_joins.append(p_padded.upper())
+                enrich_sources.append("exact_precinct_match")
+                enrich_confidences.append("high")
+                prec_sources.append(os.path.basename(contest_file_path) if contest_file_path else "detail.csv")
+                prec_assigned.append(p_padded)
+                cross_src_files.append("None")
+                cross_match_rules.append("exact_match")
+                cross_otm_flags.append("NO")
+                result_inherited.append(False)
+            else:
+                prec_joins.append("UNMAPPED_PRECINCT")
+                enrich_sources.append("no_contest_match")
+                enrich_confidences.append("none")
+                prec_sources.append("None")
+                prec_assigned.append("None")
+                cross_src_files.append("None")
+                cross_match_rules.append("None")
+                cross_otm_flags.append("NO")
+                result_inherited.append(False)
+                
+    df_base['PrecinctName_JOIN'] = prec_joins
     
     df_calc = pd.DataFrame({'PREC_JOIN': df_contest['PREC_JOIN'].unique()})
     
@@ -639,6 +730,18 @@ def run_enrichment_calculations(base_scored_df, contest_df, contest_prec_col, co
 
     df_merged = pd.merge(df_base, df_calc, left_on='PrecinctName_JOIN', right_on='PREC_JOIN', how='left')
     
+    # Store crosswalk columns
+    df_merged['Contest_Enrichment_Source'] = enrich_sources
+    df_merged['Contest_Enrichment_Confidence'] = enrich_confidences
+    df_merged['SOV_Precinct_Source'] = prec_sources
+    df_merged['SOV_Precinct_Assigned'] = prec_assigned
+    df_merged['Crosswalk_Source_File'] = cross_src_files
+    df_merged['Crosswalk_Match_Rule'] = cross_match_rules
+    df_merged['Crosswalk_One_To_Many_Flag'] = cross_otm_flags
+    df_merged['Contest_Result_Is_Inherited'] = result_inherited
+    df_merged['Vote_Estimation_Method'] = "none"
+    df_merged['Estimated_Child_Votes'] = np.nan
+    
     for comp_name, rules_list in components.items():
         score_col = f"Contest_{comp_name}_Score"
         df_merged[score_col] = np.nan
@@ -680,6 +783,24 @@ def run_enrichment_calculations(base_scored_df, contest_df, contest_prec_col, co
     # Enforce no_contest_match if enrichment score is NaN
     df_merged.loc[df_merged["Contest_Enrichment_Score"].isna(), "Contest_Coverage_Flag"] = "no_contest_match"
     
+    # Set Inherited_Support_Rate and Official_Parent_SOV_Total_Votes
+    df_merged['Inherited_Support_Rate'] = np.nan
+    df_merged.loc[df_merged['Contest_Result_Is_Inherited'] == True, 'Inherited_Support_Rate'] = df_merged['Contest_Support_Score']
+    
+    df_merged['Official_Parent_SOV_Total_Votes'] = np.nan
+    parent_totals = {}
+    if len(config) > 0:
+        rule = config[0]
+        fav_col = rule.get("favorable_col")
+        opp_col = rule.get("opposition_col")
+        if fav_col in df_contest.columns and opp_col in df_contest.columns:
+            grouped_totals = df_contest.groupby('PREC_JOIN').apply(
+                lambda df: pd.to_numeric(df[fav_col], errors='coerce').sum() + pd.to_numeric(df[opp_col], errors='coerce').sum()
+            ).to_dict()
+            parent_totals = grouped_totals
+            
+    df_merged['Official_Parent_SOV_Total_Votes'] = df_merged['PREC_JOIN'].map(parent_totals)
+
     has_enrich = df_merged["Contest_Enrichment_Score"].notna()
     df_merged["Final_Priority_Score"] = df_merged["Base_Priority_Score"]
     df_merged.loc[has_enrich, "Final_Priority_Score"] = (
@@ -701,6 +822,7 @@ def run_enrichment_calculations(base_scored_df, contest_df, contest_prec_col, co
     save_diagnostics(df_final, config, base_scored_df, df_contest, contest_prec_col, output_dir)
     
     return df_final
+
 
 def save_diagnostics(df_final, config, base_scored_df, contest_df, contest_prec_col, output_dir):
     """

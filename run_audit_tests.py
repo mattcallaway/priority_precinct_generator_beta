@@ -469,9 +469,119 @@ def run_tests():
                 print("FAIL: complete_sov_required_report.md not generated.")
                 failures += 1
 
+            # TEST 9: Official Precinct Crosswalk and Ingestion Validation
+            print("\nTEST 9: Official Precinct Crosswalk and Ingestion Validation...")
+            
+            # Make sure build_canonical_crosswalk is executed
+            from scratch.build_precinct_crosswalk import build_canonical_crosswalk
+            build_canonical_crosswalk()
+            
+            # 1. Assert crosswalk CSVs were generated
+            parsed_reg_path = r"outputs\precinct_crosswalk\parsed_regular_vbm_voting_xref.csv"
+            parsed_vot_path = r"outputs\precinct_crosswalk\parsed_voting_vbm_regular_xref.csv"
+            canonical_path = r"outputs\precinct_crosswalk\canonical_sov_to_voter_precinct_crosswalk.csv"
+            
+            if os.path.exists(parsed_reg_path) and os.path.exists(parsed_vot_path) and os.path.exists(canonical_path):
+                print("PASS: Cross-reference and canonical CSV files created successfully.")
+            else:
+                print("FAIL: Crosswalk CSV files missing.")
+                failures += 1
+                
+            # 2. Run pipeline with real files and crosswalk active
+            res_crosswalk = run_pipeline(
+                weights={'turnout_gap': 0.4, 'competitive_index': 0.4, 'density': 0.2},
+                target_params={'ad': None, 'sd': 4, 'city': None},
+                allow_mock=False,
+                contest_file_path="data/detail.csv",
+                contest_prec_col="Precinct",
+                contest_influence_weight=0.3,
+                allow_low_coverage_contest=False,
+                override_scope_mismatch=False,
+                scope_override_confirmed=False,
+                voter_col_mappings={
+                    'supervisorial': 'CountySupervisorName',
+                    'senate': 'SD',
+                    'precinctname': 'PrecinctName',
+                    'party': 'Party',
+                    'turnout24': 'General24',
+                    'turnout22': 'General22'
+                },
+                run_mode="PRODUCTION_MODE",
+                trigger_source="streamlit_ui"
+            )
+            
+            cw_verdict = res_crosswalk.get("verdict")
+            cw_coverage = res_crosswalk.get("universe_coverage", 0.0)
+            cw_matched = res_crosswalk.get("matched_precincts", 0)
+            cw_top50_unmatched = res_crosswalk.get("top_50_unmatched", 0)
+            
+            # Assert 100.00% coverage or matches all 268 precincts
+            if cw_matched == 268:
+                print(f"PASS: Total matched precincts resolved is {cw_matched} (100.00% coverage).")
+            else:
+                print(f"FAIL: Matched count was {cw_matched}, expected 268.")
+                failures += 1
+                
+            # Assert correct production-readiness verdict
+            if cw_verdict == "PRODUCTION_READY_WITH_INHERITED_CONTEST_SIGNALS":
+                print("PASS: Verdict is PRODUCTION_READY_WITH_INHERITED_CONTEST_SIGNALS.")
+            else:
+                print(f"FAIL: Expected PRODUCTION_READY_WITH_INHERITED_CONTEST_SIGNALS, got {cw_verdict}")
+                failures += 1
+                
+            # Load production precincts CSV to assert non-duplication of vote totals
+            prod_df_cw = pd.read_csv("outputs/final_rankings/production_priority_precincts.csv")
+            
+            # Check the rows that are marked inherited
+            inherited_rows_df = prod_df_cw[prod_df_cw["Contest_Result_Is_Inherited"] == True]
+            exact_rows_df = prod_df_cw[prod_df_cw["Contest_Result_Is_Inherited"] == False]
+            
+            # Assert inherited flags are present
+            if len(inherited_rows_df) > 0:
+                print(f"PASS: Found {len(inherited_rows_df)} inherited precinct rows.")
+            else:
+                print("FAIL: No inherited precinct rows found.")
+                failures += 1
+                
+            # Assert child raw votes are NaN/blank for inherited rows
+            nan_totals_count = inherited_rows_df["Contest_Total_Votes"].isna().sum()
+            if nan_totals_count == len(inherited_rows_df):
+                print("PASS: Child raw votes remain blank for all inherited rows (non-duplication verified).")
+            else:
+                print(f"FAIL: Found {len(inherited_rows_df) - nan_totals_count} inherited rows with duplicated raw totals.")
+                failures += 1
+                
+            # Assert parent raw totals are saved in Official_Parent_SOV_Total_Votes
+            valid_parent_totals = inherited_rows_df["Official_Parent_SOV_Total_Votes"].notna().sum()
+            if valid_parent_totals == len(inherited_rows_df):
+                print("PASS: Parent raw totals are successfully saved in Official_Parent_SOV_Total_Votes.")
+            else:
+                print(f"FAIL: Found {len(inherited_rows_df) - valid_parent_totals} inherited rows with missing parent totals.")
+                failures += 1
+                
+            # Assert exact match rows keep their raw votes
+            non_nan_totals = exact_rows_df["Contest_Total_Votes"].notna().sum()
+            if non_nan_totals == len(exact_rows_df):
+                print("PASS: Exact match rows successfully retain their raw SOV vote counts.")
+            else:
+                print(f"FAIL: Found exact match rows with missing raw vote totals.")
+                failures += 1
+                
+            # Assert that the new validation summary files exist
+            val_summary_path = "outputs/precinct_crosswalk/crosswalk_validation_summary.md"
+            cov_sim_path = "outputs/precinct_crosswalk/crosswalk_coverage_simulation.csv"
+            match_aud_path = "outputs/precinct_crosswalk/crosswalk_match_audit.csv"
+            
+            if os.path.exists(val_summary_path) and os.path.exists(cov_sim_path) and os.path.exists(match_aud_path):
+                print("PASS: Crosswalk validation summaries and simulation CSVs generated successfully.")
+            else:
+                print("FAIL: Crosswalk validation summary documents missing.")
+                failures += 1
+
             # Restore config
             with open(config_path, "w", encoding="utf-8") as f_mc:
                 json.dump(original_config, f_mc, indent=2)
+
                 
         finally:
             # Restore backup if it existed, otherwise remove temporary files

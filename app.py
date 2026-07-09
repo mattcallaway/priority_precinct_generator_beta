@@ -1526,7 +1526,7 @@ with tab5:
                     st.markdown("### 📊 Key Status Summary")
                     ks1, ks2, ks3 = st.columns(3)
                     
-                    verdict_style = "color: green;" if result.get("verdict") == "PRODUCTION_READY" else "color: orange;" if result.get("verdict") in ["PRODUCTION_READY_WITH_CAUTION", "LIMITED_CONTEST_COVERAGE_PREVIEW"] else "color: red;"
+                    verdict_style = "color: green;" if result.get("verdict") in ["PRODUCTION_READY", "PRODUCTION_READY_WITH_INHERITED_CONTEST_SIGNALS"] else "color: orange;" if result.get("verdict") in ["PRODUCTION_READY_WITH_CAUTION", "LIMITED_CONTEST_COVERAGE_PREVIEW"] else "color: red;"
                     ks1.markdown(f"**Production readiness verdict:** <span style='{verdict_style} font-weight: bold;'>{result.get('verdict')}</span>", unsafe_allow_html=True)
                     ks1.write(f"**Total precincts in selected universe:** {result.get('total_precincts')}")
                     ks1.write(f"**Matched precincts:** {result.get('matched_precincts')}")
@@ -1566,6 +1566,24 @@ with tab5:
                             st.download_button("📥 Download precinct_normalization_audit.csv", data=f.read(), file_name="precinct_normalization_audit.csv", mime="text/csv")
                     else:
                         st.warning("precinct_normalization_audit.csv not found.")
+
+                    # C. Precinct Crosswalk Outputs
+                    st.markdown("### 🗺️ Precinct Crosswalk Outputs")
+                    cw_summary_path = "outputs/precinct_crosswalk/crosswalk_validation_summary.md"
+                    if os.path.exists(cw_summary_path):
+                        with open(cw_summary_path, "r", encoding="utf-8") as f:
+                            st.markdown(f.read())
+                            
+                    cw_csv_path = "outputs/precinct_crosswalk/canonical_sov_to_voter_precinct_crosswalk.csv"
+                    if os.path.exists(cw_csv_path):
+                        with open(cw_csv_path, "r", encoding="utf-8") as f:
+                            st.download_button("📥 Download canonical_sov_to_voter_precinct_crosswalk.csv", data=f.read(), file_name="canonical_sov_to_voter_precinct_crosswalk.csv", mime="text/csv")
+                            
+                    cw_audit_path = "outputs/precinct_crosswalk/crosswalk_match_audit.csv"
+                    if os.path.exists(cw_audit_path):
+                        with open(cw_audit_path, "r", encoding="utf-8") as f:
+                            st.download_button("📥 Download crosswalk_match_audit.csv", data=f.read(), file_name="crosswalk_match_audit.csv", mime="text/csv")
+
             else:
                 st.error("❌ Critical Pipeline Crash.")
                 st.code(result.get("error", "Unknown Fault"))
