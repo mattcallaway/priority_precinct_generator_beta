@@ -591,7 +591,11 @@ def run_enrichment_calculations(base_scored_df, contest_df, contest_prec_col, co
         xref_row = cross_map.get(pname_upper)
         if xref_row is not None and str(xref_row.get("Valid_For_Production", "")).upper() == "TRUE":
             voting_p = str(xref_row.get("Voting_Precinct", "")).strip()
+            if voting_p.isdigit():
+                voting_p = voting_p.zfill(7)
             prec_joins.append(voting_p.upper())
+
+
             
             rule = str(xref_row.get("Match_Rule", ""))
             cross_match_rules.append(rule)
