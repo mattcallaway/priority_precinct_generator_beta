@@ -553,6 +553,8 @@ Production evaluation allowed: {prod_allowed_val}
             scope_user_confirmed = False
         
     matches_scope = "Y" if relationship in ["exact_match", "contest_broader_than_selected_universe"] else "N"
+    scope_match_ok = relationship in ["exact_match", "contest_broader_than_selected_universe"]
+
         
     # Map raw rows
     if contest_df is not None and contest_prec_col in contest_df.columns:
