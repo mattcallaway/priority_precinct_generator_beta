@@ -415,15 +415,15 @@ def run_tests():
             with open(config_path, "w", encoding="utf-8") as f_mc:
                 json.dump(real_d4_mock_config, f_mc, indent=2)
                 
-            # Temporarily delete crosswalk to test incomplete SOV
+            # Temporarily delete crosswalk and disable self-healing to test incomplete SOV
             if os.path.exists(crosswalk_path):
                 try:
                     os.remove(crosswalk_path)
                 except:
                     pass
+            os.environ["DISABLE_SELF_HEALING_CROSSWALK"] = "TRUE"
                     
             res_d4_real = run_pipeline(
-
                 weights={'turnout_gap': 0.4, 'competitive_index': 0.4, 'density': 0.2},
                 target_params={'ad': None, 'sd': 4, 'city': None},
                 allow_mock=False,
@@ -444,6 +444,8 @@ def run_tests():
                 run_mode="PRODUCTION_MODE",
                 trigger_source="streamlit_ui"
             )
+            os.environ["DISABLE_SELF_HEALING_CROSSWALK"] = "FALSE"
+
             
             v_verdict = res_d4_real.get("verdict")
             if v_verdict == "CONTEST_DATA_INCOMPLETE_FOR_SELECTED_UNIVERSE":

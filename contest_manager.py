@@ -537,9 +537,10 @@ def run_enrichment_calculations(base_scored_df, contest_df, contest_prec_col, co
     
     df_base = base_scored_df.copy()
     
-    # Self-healing build_canonical_crosswalk if not present
     crosswalk_path = "outputs/precinct_crosswalk/canonical_sov_to_voter_precinct_crosswalk.csv"
-    if not os.path.exists(crosswalk_path):
+    if not os.path.exists(crosswalk_path) and os.environ.get("DISABLE_SELF_HEALING_CROSSWALK") != "TRUE":
+
+
         if os.path.exists(r"D:\Downloads\ewmr010_regabsvotpctxref_2026-06-02.pdf") and os.path.exists(r"D:\Downloads\ewmr008_votabsregpctxref_2026-06-02.pdf"):
             try:
                 import sys
