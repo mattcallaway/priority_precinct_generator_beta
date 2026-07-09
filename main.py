@@ -1142,7 +1142,10 @@ Production evaluation allowed: {prod_allowed_val}
             
     # Apply Incomplete SOV / Crosswalk logic
     crosswalk_path = "outputs/precinct_crosswalk/canonical_sov_to_voter_precinct_crosswalk.csv"
-    pdfs_exist = os.path.exists(r"D:\Downloads\ewmr010_regabsvotpctxref_2026-06-02.pdf") and os.path.exists(r"D:\Downloads\ewmr008_votabsregpctxref_2026-06-02.pdf")
+    pdfs_exist = (os.path.exists(r"D:\Downloads\ewmr010_regabsvotpctxref_2026-06-02.pdf") and 
+                  os.path.exists(r"D:\Downloads\ewmr008_votabsregpctxref_2026-06-02.pdf") and
+                  os.environ.get("DISABLE_SELF_HEALING_CROSSWALK") != "TRUE")
+
     cross_active = os.path.exists(crosswalk_path)
     
     is_incomplete_sov = False
