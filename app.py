@@ -44,6 +44,343 @@ def get_active_contest_file():
             return path
     return None
 
+import zipfile
+import json
+from datetime import datetime
+from pathlib import Path
+
+def get_file_mime_type(path):
+    ext = os.path.splitext(path)[1].lower()
+    mime_types = {
+        '.csv': 'text/csv',
+        '.md': 'text/markdown',
+        '.json': 'application/json',
+        '.zip': 'application/zip',
+        '.txt': 'text/plain'
+    }
+    return mime_types.get(ext, 'application/octet-stream')
+
+def build_output_manifest(run_context=None):
+    candidates = [
+        # 1. Main Campaign Outputs
+        {
+            "label": "Production Priority Precincts CSV",
+            "file_path": "outputs/final_rankings/production_priority_precincts.csv",
+            "file_type": ".csv",
+            "required_or_optional": "required",
+            "category": "1. Main Campaign Outputs",
+            "description": "Final prioritized precinct list for field operations."
+        },
+        {
+            "label": "Base Preview Rankings CSV",
+            "file_path": "outputs/final_rankings/base_preview_rankings.csv",
+            "file_type": ".csv",
+            "required_or_optional": "optional",
+            "category": "1. Main Campaign Outputs",
+            "description": "Initial baseline rankings prior to contest data enrichment."
+        },
+        # 2. Top 50 and Explainability
+        {
+            "label": "Top 50 Explainability Table",
+            "file_path": "outputs/final_rankings/top_50_explainability_table.csv",
+            "file_type": ".csv",
+            "required_or_optional": "required",
+            "category": "2. Top 50 and Explainability",
+            "description": "Detailed explanation of scores and metrics for the top 50 precincts."
+        },
+        {
+            "label": "Rank Shift Report CSV",
+            "file_path": "outputs/final_rankings/rank_shift_report.csv",
+            "file_type": ".csv",
+            "required_or_optional": "optional",
+            "category": "2. Top 50 and Explainability",
+            "description": "Precinct-by-precinct comparison of base vs final rankings."
+        },
+        # 3. Validation Reports
+        {
+            "label": "Final Validation Summary",
+            "file_path": "outputs/final_validation/final_validation_summary.md",
+            "file_type": ".md",
+            "required_or_optional": "required",
+            "category": "3. Validation Reports",
+            "description": "Main summary report of the production readiness validation."
+        },
+        {
+            "label": "Contest Scope Validation",
+            "file_path": "outputs/final_validation/contest_scope_validation.md",
+            "file_type": ".md",
+            "required_or_optional": "required",
+            "category": "3. Validation Reports",
+            "description": "Detailed scope validation report matching universe to contest boundaries."
+        },
+        {
+            "label": "Final Config Reconciliation Verdict",
+            "file_path": "outputs/contest_enrichment_reconciliation/final_config_reconciliation_verdict.md",
+            "file_type": ".md",
+            "required_or_optional": "required",
+            "category": "3. Validation Reports",
+            "description": "Verdict of the final contest classification configuration reconciliation."
+        },
+        {
+            "label": "Architecture Alignment Report",
+            "file_path": "outputs/architecture_alignment_report.md",
+            "file_type": ".md",
+            "required_or_optional": "optional",
+            "category": "3. Validation Reports",
+            "description": "Overall report mapping data structures and realigned precinct logic."
+        },
+        # 4. Crosswalk Files
+        {
+            "label": "Official Crosswalk Audit",
+            "file_path": "outputs/precinct_crosswalk/canonical_sov_to_voter_precinct_crosswalk.csv",
+            "file_type": ".csv",
+            "required_or_optional": "optional",
+            "category": "4. Crosswalk Files",
+            "description": "Canonical mapping of Voting Precincts (SOV) to Regular Precincts (Voter File)."
+        },
+        {
+            "label": "Crosswalk Validation Summary",
+            "file_path": "outputs/precinct_crosswalk/crosswalk_validation_summary.md",
+            "file_type": ".md",
+            "required_or_optional": "optional",
+            "category": "4. Crosswalk Files",
+            "description": "Validation summary for precinct crosswalk mapping."
+        },
+        {
+            "label": "Crosswalk Match Audit",
+            "file_path": "outputs/precinct_crosswalk/crosswalk_match_audit.csv",
+            "file_type": ".csv",
+            "required_or_optional": "optional",
+            "category": "4. Crosswalk Files",
+            "description": "Detailed match audit logs for each precinct in the crosswalk."
+        },
+        {
+            "label": "Crosswalk Coverage Simulation",
+            "file_path": "outputs/precinct_crosswalk/crosswalk_coverage_simulation.csv",
+            "file_type": ".csv",
+            "required_or_optional": "optional",
+            "category": "4. Crosswalk Files",
+            "description": "Simulation log verifying voter coverage under crosswalk mapping."
+        },
+        {
+            "label": "Regular-to-Voting Xref (ewmr010)",
+            "file_path": "outputs/precinct_crosswalk/parsed_regular_vbm_voting_xref.csv",
+            "file_type": ".csv",
+            "required_or_optional": "optional",
+            "category": "4. Crosswalk Files",
+            "description": "Parsed regular precinct to VBM/voting precinct crosswalk log."
+        },
+        {
+            "label": "Voting-to-Regular Xref (ewmr008)",
+            "file_path": "outputs/precinct_crosswalk/parsed_voting_vbm_regular_xref.csv",
+            "file_type": ".csv",
+            "required_or_optional": "optional",
+            "category": "4. Crosswalk Files",
+            "description": "Parsed voting precinct to VBM/regular precinct crosswalk log."
+        },
+        # 5. Diagnostic Files
+        {
+            "label": "Readiness Contradiction Report",
+            "file_path": "outputs/final_validation/readiness_contradiction_report.md",
+            "file_type": ".md",
+            "required_or_optional": "optional",
+            "category": "5. Diagnostic Files",
+            "description": "Details on any contradictions in validation status."
+        },
+        {
+            "label": "Proof Exports Summary",
+            "file_path": "outputs/final_validation/proof_exports_summary.md",
+            "file_type": ".md",
+            "required_or_optional": "optional",
+            "category": "5. Diagnostic Files",
+            "description": "High-level summary of all generated proof exports."
+        },
+        {
+            "label": "Contest Coverage Summary",
+            "file_path": "outputs/final_validation/contest_coverage_summary.md",
+            "file_type": ".md",
+            "required_or_optional": "optional",
+            "category": "5. Diagnostic Files",
+            "description": "Detailed coverage analysis across all voter file precincts."
+        },
+        {
+            "label": "Configuration Truth Report",
+            "file_path": "outputs/final_validation/configuration_truth_report.md",
+            "file_type": ".md",
+            "required_or_optional": "optional",
+            "category": "5. Diagnostic Files",
+            "description": "Analysis of configuration values compared to database state."
+        },
+        {
+            "label": "Context Consistency Report",
+            "file_path": "outputs/final_validation/context_consistency_report.md",
+            "file_type": ".md",
+            "required_or_optional": "optional",
+            "category": "5. Diagnostic Files",
+            "description": "Verification report for context parameters consistency."
+        },
+        {
+            "label": "Active Overrides Log",
+            "file_path": "outputs/final_validation/active_overrides_log.json",
+            "file_type": ".json",
+            "required_or_optional": "optional",
+            "category": "5. Diagnostic Files",
+            "description": "JSON log listing all active validation overrides."
+        },
+        {
+            "label": "Contest Scoring Breakdown",
+            "file_path": "outputs/contest_data_manager/contest_scoring_breakdown.csv",
+            "file_type": ".csv",
+            "required_or_optional": "optional",
+            "category": "5. Diagnostic Files",
+            "description": "Precinct-by-precinct scoring breakdown for active contests."
+        },
+        {
+            "label": "Contest Rank Shift Report",
+            "file_path": "outputs/contest_data_manager/contest_rank_shift_report.csv",
+            "file_type": ".csv",
+            "required_or_optional": "optional",
+            "category": "5. Diagnostic Files",
+            "description": "Report tracking priority changes with contest enrichment."
+        },
+        {
+            "label": "Contest Coverage Report",
+            "file_path": "outputs/contest_data_manager/contest_coverage_report.csv",
+            "file_type": ".csv",
+            "required_or_optional": "optional",
+            "category": "5. Diagnostic Files",
+            "description": "Report on voter-level contest coverage."
+        },
+        {
+            "label": "Precinct Normalization Audit",
+            "file_path": "outputs/contest_data_manager/precinct_normalization_audit.csv",
+            "file_type": ".csv",
+            "required_or_optional": "optional",
+            "category": "5. Diagnostic Files",
+            "description": "Normalization trace log mapping raw precinct IDs."
+        },
+        {
+            "label": "Architecture Alignment File Trace",
+            "file_path": "outputs/architecture_alignment_file_trace.csv",
+            "file_type": ".csv",
+            "required_or_optional": "optional",
+            "category": "5. Diagnostic Files",
+            "description": "Detailed file path trace mapping pipeline dependencies."
+        }
+    ]
+    
+    manifest = []
+    for item in candidates:
+        path = item["file_path"]
+        exists = os.path.exists(path)
+        item["exists"] = exists
+        item["size_bytes"] = os.path.getsize(path) if exists else None
+        manifest.append(item)
+    return manifest
+
+def persist_output_manifest(manifest):
+    st.session_state["latest_output_manifest"] = manifest
+
+def create_outputs_zip(manifest, run_context=None):
+    os.makedirs("outputs/final_downloads", exist_ok=True)
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    zip_path = Path(f"outputs/final_downloads/ppg_validation_outputs_{timestamp}.zip")
+    
+    files_included = []
+    files_missing = []
+    
+    with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
+        for item in manifest:
+            src_path = Path(item["file_path"])
+            if item["exists"] and src_path.exists():
+                rel_zip_path = src_path.relative_to("outputs")
+                zipf.write(src_path, arcname=rel_zip_path)
+                files_included.append(str(rel_zip_path))
+            else:
+                files_missing.append(item["file_path"])
+                
+        # Generate download_manifest.json
+        manifest_data = {
+            "generated_timestamp": datetime.now().isoformat(),
+            "run_mode": run_context.get("run_mode", "USER_DASHBOARD_MODE") if run_context else "USER_DASHBOARD_MODE",
+            "active_voter_file": run_context.get("active_voter_file", "data/voter_file.csv") if run_context else "data/voter_file.csv",
+            "active_contest_file": run_context.get("active_contest_file", "") if run_context else "",
+            "active_cross_reference_files": run_context.get("active_cross_reference_files", []) if run_context else [],
+            "readiness_verdict": run_context.get("readiness_verdict", "unknown") if run_context else "unknown",
+            "files_included": files_included,
+            "files_missing": files_missing
+        }
+        
+        zipf.writestr("download_manifest.json", json.dumps(manifest_data, indent=2))
+        
+    return zip_path
+
+def render_download_panel(manifest, run_context=None):
+    st.markdown("---")
+    st.markdown("## 📥 Download Center")
+    
+    existing_items = [item for item in manifest if item["exists"]]
+    if not existing_items:
+        st.info("No files available for download yet. Run the pipeline to generate outputs.")
+        return
+
+    categories = [
+        "1. Main Campaign Outputs",
+        "2. Top 50 and Explainability",
+        "3. Validation Reports",
+        "4. Crosswalk Files",
+        "5. Diagnostic Files"
+    ]
+    
+    for category in categories:
+        cat_items = [item for item in manifest if item["category"] == category and item["exists"]]
+        if cat_items:
+            st.markdown(f"### {category}")
+            for item in cat_items:
+                path = item["file_path"]
+                label = item["label"]
+                desc = item["description"]
+                size_str = ""
+                if item["size_bytes"] is not None:
+                    size_kb = item["size_bytes"] / 1024.0
+                    size_str = f" ({size_kb:.1f} KB)"
+                
+                col_info, col_btn = st.columns([3, 1])
+                col_info.markdown(f"**{label}**{size_str}  \n*{desc}*")
+                
+                mime = get_file_mime_type(path)
+                try:
+                    with open(path, "rb") as f:
+                        file_bytes = f.read()
+                    col_btn.download_button(
+                        label=f"📥 Download {os.path.basename(path)}",
+                        data=file_bytes,
+                        file_name=os.path.basename(path),
+                        mime=mime,
+                        key=f"dl_{path.replace('/', '_').replace('.', '_')}"
+                    )
+                except Exception as e:
+                    col_btn.error(f"Error loading file: {e}")
+                    
+    st.markdown("### 6. Download Everything")
+    col_info, col_btn = st.columns([3, 1])
+    col_info.markdown("**Download All Outputs (.zip)**  \n*Packages all generated outputs and validation reports into a single ZIP archive.*")
+    
+    try:
+        zip_path = create_outputs_zip(manifest, run_context)
+        with open(zip_path, "rb") as f:
+            zip_bytes = f.read()
+        col_btn.download_button(
+            label="📥 Download All Outputs (.zip)",
+            data=zip_bytes,
+            file_name=os.path.basename(zip_path),
+            mime="application/zip",
+            key="dl_all_outputs_zip"
+        )
+    except Exception as e:
+        col_btn.error(f"Error creating ZIP: {e}")
+
+
 def save_uploaded(file_obj, filename):
     if file_obj is not None:
         with open(os.path.join("data", filename), "wb") as f:
@@ -1415,14 +1752,16 @@ with tab5:
 """)
         st.write("---")
 
-        if not production_ranking_ready:
-            st.error("🔒 **Pipeline Locked:** Contest data has not been loaded or fully classified.")
-            st.info("You must upload and classify at least one contest in the 'Contest Data Manager' tab before scoring can execute.")
-            run_btn_label = "🔒 Execute Scoring (Locked)"
-            btn_disabled = True
-
         if st.button(run_btn_label, type="primary", use_container_width=True, disabled=btn_disabled):
+
             with st.spinner("Running Realigned Precinct Algorithms..."):
+                if "latest_pipeline_result" in st.session_state:
+                    del st.session_state["latest_pipeline_result"]
+                if "latest_output_manifest" in st.session_state:
+                    del st.session_state["latest_output_manifest"]
+                if "latest_run_context" in st.session_state:
+                    del st.session_state["latest_run_context"]
+
                 if not status['metrics'] and status['shp_srprec']: extract_precinct_metrics("data/srprec_shapes.zip", "data")
                 if not status['city'] and status['city_shapefiles_ready']: generate_city_assignment_from_shapes("data/srprec_shapes.zip", "data/city_shapes.zip", "data")
                 if not status['dist'] and status['dist_shapefiles_ready']: generate_district_assignment_from_shapes("data/srprec_shapes.zip", "data/assembly_shapes.zip", "data/supervisorial_shapes.zip", "data")
@@ -1456,135 +1795,105 @@ with tab5:
                 for w in result.get("warnings", []): st.warning(f"⚠ {w}")
                 
             elif result.get("status") == "success":
-                top_df = result.get("top_precincts", pd.DataFrame())
-                if top_df.empty:
-                    st.error("❌ THE PIPELINE EXECUTED, BUT 0 PRECINCTS MATCHED YOUR TARGETING SELECTION.")
-                else:
-                    st.success("✅ Strict Data Execution Complete.")
-                    
-                    if "Contest_Confidence" in top_df.columns and not top_df.empty:
-                        avg_conf = top_df["Contest_Confidence"].mean() * 100.0
-                        if active_contest_file and contest_prec_col and avg_conf < 100.0:
-                            st.warning(f"⚠️ **Warning:** Contest data covers only {avg_conf:.1f}% of precincts.")
-
-                    try:
-                        voter_count = len(pd.read_csv("data/voter_file.csv", usecols=[0]))
-                    except:
-                        voter_count = 0
-
-                    m1, m2, m3 = st.columns(3)
-                    m1.markdown(f'<div class="metric-box"><div class="metric-title">Voters</div><div class="metric-value">{voter_count:,}</div></div>', unsafe_allow_html=True)
-                    m2.markdown(f'<div class="metric-box"><div class="metric-title">Valid Precincts Scored</div><div class="metric-value">{len(top_df):,}</div></div>', unsafe_allow_html=True)
-                    m3.markdown(f'<div class="metric-box"><div class="metric-title">Mode</div><div class="metric-value" style="color: {"green" if result.get("has_contest") else "orange"};">{"Production" if result.get("has_contest") else "Base Preview"}</div></div>', unsafe_allow_html=True)
-                    
-                    if "Rank_Change" in top_df.columns and result.get("has_contest"):
-                        changed = top_df[top_df["Rank_Change"] != 0]
-                        if not changed.empty:
-                            st.markdown("#### 🔄 Rank Shift Analysis (Base Rank vs Final Rank)")
-                            st.write(f"- **Precincts with Rank Changes:** {len(changed)} out of {len(top_df)} precincts")
-                            st.write(f"- **Average Rank Shift:** {changed['Rank_Change'].abs().mean():.1f} positions")
-                    
-                    st.markdown("### Strict Output Files")
-                    dl_cols = st.columns(3)
-                    
-                    # 1. Base Preview Rankings
-                    base_path = "outputs/final_rankings/base_preview_rankings.csv"
-                    if os.path.exists(base_path):
-                        with open(base_path, "r", encoding="utf-8") as f:
-                            dl_cols[0].download_button("📥 Base Preview Rankings (CSV)", data=f.read(), file_name="base_preview_rankings.csv", mime="text/csv")
-                            
-                    # 2. Production priority precincts
-                    prod_path = "outputs/final_rankings/production_priority_precincts.csv"
-                    if os.path.exists(prod_path):
-                        with open(prod_path, "r", encoding="utf-8") as f:
-                            dl_cols[1].download_button("📥 Production Final Rankings (CSV)", data=f.read(), file_name="production_priority_precincts.csv", mime="text/csv")
-                            
-                    # 3. Rank shift report
-                    shift_path = "outputs/final_rankings/rank_shift_report.csv"
-                    if os.path.exists(shift_path):
-                        with open(shift_path, "r", encoding="utf-8") as f:
-                            dl_cols[2].download_button("📥 Rank Shift Report (CSV)", data=f.read(), file_name="rank_shift_report.csv", mime="text/csv")
-                            
-                    st.markdown("### Architecture Realignment Reports")
-                    ar_cols = st.columns(2)
-                    
-                    # Report markdown
-                    ar_path = "outputs/architecture_alignment_report.md"
-                    if os.path.exists(ar_path):
-                        with open(ar_path, "r", encoding="utf-8") as f:
-                            ar_cols[0].download_button("📄 Architecture Report (Markdown)", data=f.read(), file_name="architecture_alignment_report.md", mime="text/markdown")
-                            
-                    # Trace CSV
-                    art_path = "outputs/architecture_alignment_file_trace.csv"
-                    if os.path.exists(art_path):
-                        with open(art_path, "r", encoding="utf-8") as f:
-                            ar_cols[1].download_button("📥 File Trace Log (CSV)", data=f.read(), file_name="architecture_alignment_file_trace.csv", mime="text/csv")
-                            
-                    st.markdown("---")
-                    st.markdown("## 🔍 Proof Exports for Review")
-                    
-                    # Key Status Summary
-                    st.markdown("### 📊 Key Status Summary")
-                    ks1, ks2, ks3 = st.columns(3)
-                    
-                    verdict_style = "color: green;" if result.get("verdict") in ["PRODUCTION_READY", "PRODUCTION_READY_WITH_INHERITED_CONTEST_SIGNALS"] else "color: orange;" if result.get("verdict") in ["PRODUCTION_READY_WITH_CAUTION", "LIMITED_CONTEST_COVERAGE_PREVIEW"] else "color: red;"
-                    ks1.markdown(f"**Production readiness verdict:** <span style='{verdict_style} font-weight: bold;'>{result.get('verdict')}</span>", unsafe_allow_html=True)
-                    ks1.write(f"**Total precincts in selected universe:** {result.get('total_precincts')}")
-                    ks1.write(f"**Matched precincts:** {result.get('matched_precincts')}")
-                    ks1.write(f"**Unmatched precincts:** {result.get('unmatched_precincts')}")
-                    
-                    ks2.write(f"**Countywide contest coverage:** {result.get('countywide_coverage', 0.0):.2f}%")
-                    ks2.write(f"**Selected-universe contest coverage:** {result.get('universe_coverage', 0.0):.2f}%")
-                    ks2.write(f"**Contest influence weight:** {result.get('contest_influence_weight', 0.0):.2f}")
-                    
-                    ks3.write(f"**Top 50 precincts without contest match:** {result.get('top_50_unmatched')}")
-                    ks3.write(f"**Tiny precincts in top 50:** {result.get('tiny_in_top_50')}")
-                    ks3.write(f"**Active normalization rules:** {result.get('active_normalization_rules')}")
-                    ks3.write(f"**Active overrides:** {result.get('active_overrides')}")
-                    
-                    # A. Production Priority Preview
-                    st.markdown("### 🏆 Production Priority Preview (First 100 Rows)")
-                    prod_csv_path = "outputs/final_rankings/production_priority_precincts.csv"
-                    if os.path.exists(prod_csv_path):
-                        prod_preview_df = pd.read_csv(prod_csv_path)
-                        prod_abs = os.path.abspath(prod_csv_path)
-                        st.write(f"📁 **Local Path:** `{prod_abs}` | 📊 **Row Count:** `{len(prod_preview_df)}` rows")
-                        st.dataframe(prod_preview_df.head(100), use_container_width=True)
-                        with open(prod_csv_path, "r", encoding="utf-8") as f:
-                            st.download_button("📥 Download production_priority_precincts.csv", data=f.read(), file_name="production_priority_precincts.csv", mime="text/csv")
-                    else:
-                        st.warning("production_priority_precincts.csv not found.")
-                        
-                    # B. Precinct Normalization Audit Preview
-                    st.markdown("### 📝 Precinct Normalization Audit Preview (First 250 Rows)")
-                    audit_csv_path = "outputs/contest_data_manager/precinct_normalization_audit.csv"
-                    if os.path.exists(audit_csv_path):
-                        audit_preview_df = pd.read_csv(audit_csv_path)
-                        audit_abs = os.path.abspath(audit_csv_path)
-                        st.write(f"📁 **Local Path:** `{audit_abs}` | 📊 **Row Count:** `{len(audit_preview_df)}` rows")
-                        st.dataframe(audit_preview_df.head(250), use_container_width=True)
-                        with open(audit_csv_path, "r", encoding="utf-8") as f:
-                            st.download_button("📥 Download precinct_normalization_audit.csv", data=f.read(), file_name="precinct_normalization_audit.csv", mime="text/csv")
-                    else:
-                        st.warning("precinct_normalization_audit.csv not found.")
-
-                    # C. Precinct Crosswalk Outputs
-                    st.markdown("### 🗺️ Precinct Crosswalk Outputs")
-                    cw_summary_path = "outputs/precinct_crosswalk/crosswalk_validation_summary.md"
-                    if os.path.exists(cw_summary_path):
-                        with open(cw_summary_path, "r", encoding="utf-8") as f:
-                            st.markdown(f.read())
-                            
-                    cw_csv_path = "outputs/precinct_crosswalk/canonical_sov_to_voter_precinct_crosswalk.csv"
-                    if os.path.exists(cw_csv_path):
-                        with open(cw_csv_path, "r", encoding="utf-8") as f:
-                            st.download_button("📥 Download canonical_sov_to_voter_precinct_crosswalk.csv", data=f.read(), file_name="canonical_sov_to_voter_precinct_crosswalk.csv", mime="text/csv")
-                            
-                    cw_audit_path = "outputs/precinct_crosswalk/crosswalk_match_audit.csv"
-                    if os.path.exists(cw_audit_path):
-                        with open(cw_audit_path, "r", encoding="utf-8") as f:
-                            st.download_button("📥 Download crosswalk_match_audit.csv", data=f.read(), file_name="crosswalk_match_audit.csv", mime="text/csv")
-
+                st.session_state["latest_pipeline_result"] = result
+                st.session_state["latest_run_context"] = {
+                    "run_mode": "USER_DASHBOARD_MODE",
+                    "active_voter_file": "data/voter_file.csv",
+                    "active_contest_file": active_contest_file or "",
+                    "active_cross_reference_files": [
+                        r"D:\Downloads\ewmr010_regabsvotpctxref_2026-06-02.pdf",
+                        r"D:\Downloads\ewmr008_votabsregpctxref_2026-06-02.pdf"
+                    ] if os.path.exists(r"D:\Downloads\ewmr010_regabsvotpctxref_2026-06-02.pdf") else [],
+                    "readiness_verdict": result.get("verdict", "unknown")
+                }
+                st.session_state["latest_output_manifest"] = build_output_manifest(st.session_state["latest_run_context"])
+                st.rerun()
             else:
                 st.error("❌ Critical Pipeline Crash.")
                 st.code(result.get("error", "Unknown Fault"))
+
+        # Render persistent results from session state
+        if st.session_state.get("latest_pipeline_result") and st.session_state.get("latest_output_manifest"):
+            result = st.session_state["latest_pipeline_result"]
+            manifest = st.session_state["latest_output_manifest"]
+            run_context = st.session_state.get("latest_run_context")
+            top_df = result.get("top_precincts", pd.DataFrame())
+            
+            if top_df.empty:
+                st.error("❌ THE PIPELINE EXECUTED, BUT 0 PRECINCTS MATCHED YOUR TARGETING SELECTION.")
+            else:
+                st.success("✅ Strict Data Execution Complete.")
+                
+                if "Contest_Confidence" in top_df.columns and not top_df.empty:
+                    avg_conf = top_df["Contest_Confidence"].mean() * 100.0
+                    if active_contest_file and contest_prec_col and avg_conf < 100.0:
+                        st.warning(f"⚠️ **Warning:** Contest data covers only {avg_conf:.1f}% of precincts.")
+
+                try:
+                    voter_count = len(pd.read_csv("data/voter_file.csv", usecols=[0]))
+                except:
+                    voter_count = 0
+
+                m1, m2, m3 = st.columns(3)
+                m1.markdown(f'<div class="metric-box"><div class="metric-title">Voters</div><div class="metric-value">{voter_count:,}</div></div>', unsafe_allow_html=True)
+                m2.markdown(f'<div class="metric-box"><div class="metric-title">Valid Precincts Scored</div><div class="metric-value">{len(top_df):,}</div></div>', unsafe_allow_html=True)
+                m3.markdown(f'<div class="metric-box"><div class="metric-title">Mode</div><div class="metric-value" style="color: {"green" if result.get("has_contest") else "orange"};">{"Production" if result.get("has_contest") else "Base Preview"}</div></div>', unsafe_allow_html=True)
+                
+                if "Rank_Change" in top_df.columns and result.get("has_contest"):
+                    changed = top_df[top_df["Rank_Change"] != 0]
+                    if not changed.empty:
+                        st.markdown("#### 🔄 Rank Shift Analysis (Base Rank vs Final Rank)")
+                        st.write(f"- **Precincts with Rank Changes:** {len(changed)} out of {len(top_df)} precincts")
+                        st.write(f"- **Average Rank Shift:** {changed['Rank_Change'].abs().mean():.1f} positions")
+                
+                render_download_panel(manifest, run_context)
+                
+                st.markdown("---")
+                st.markdown("## 🔍 Proof Exports for Review")
+                
+                st.markdown("### 📊 Key Status Summary")
+                ks1, ks2, ks3 = st.columns(3)
+                
+                verdict_style = "color: green;" if result.get("verdict") in ["PRODUCTION_READY", "PRODUCTION_READY_WITH_INHERITED_CONTEST_SIGNALS"] else "color: orange;" if result.get("verdict") in ["PRODUCTION_READY_WITH_CAUTION", "LIMITED_CONTEST_COVERAGE_PREVIEW"] else "color: red;"
+                ks1.markdown(f"**Production readiness verdict:** <span style='{verdict_style} font-weight: bold;'>{result.get('verdict')}</span>", unsafe_allow_html=True)
+                ks1.write(f"**Total precincts in selected universe:** {result.get('total_precincts')}")
+                ks1.write(f"**Matched precincts:** {result.get('matched_precincts')}")
+                ks1.write(f"**Unmatched precincts:** {result.get('unmatched_precincts')}")
+                
+                ks2.write(f"**Countywide contest coverage:** {result.get('countywide_coverage', 0.0):.2f}%")
+                ks2.write(f"**Selected-universe contest coverage:** {result.get('universe_coverage', 0.0):.2f}%")
+                ks2.write(f"**Contest influence weight:** {result.get('contest_influence_weight', 0.0):.2f}")
+                
+                ks3.write(f"**Top 50 precincts without contest match:** {result.get('top_50_unmatched')}")
+                ks3.write(f"**Tiny precincts in top 50:** {result.get('tiny_in_top_50')}")
+                ks3.write(f"**Active normalization rules:** {result.get('active_normalization_rules')}")
+                ks3.write(f"**Active overrides:** {result.get('active_overrides')}")
+                
+                st.markdown("### 🏆 Production Priority Preview (First 100 Rows)")
+                prod_csv_path = "outputs/final_rankings/production_priority_precincts.csv"
+                if os.path.exists(prod_csv_path):
+                    prod_preview_df = pd.read_csv(prod_csv_path)
+                    prod_abs = os.path.abspath(prod_csv_path)
+                    st.write(f"📁 **Local Path:** `{prod_abs}` | 📊 **Row Count:** `{len(prod_preview_df)}` rows")
+                    st.dataframe(prod_preview_df.head(100), use_container_width=True)
+                else:
+                    st.warning("production_priority_precincts.csv not found.")
+                    
+                st.markdown("### 📝 Precinct Normalization Audit Preview (First 250 Rows)")
+                audit_csv_path = "outputs/contest_data_manager/precinct_normalization_audit.csv"
+                if os.path.exists(audit_csv_path):
+                    audit_preview_df = pd.read_csv(audit_csv_path)
+                    audit_abs = os.path.abspath(audit_csv_path)
+                    st.write(f"📁 **Local Path:** `{audit_abs}` | 📊 **Row Count:** `{len(audit_preview_df)}` rows")
+                    st.dataframe(audit_preview_df.head(250), use_container_width=True)
+                else:
+                    st.warning("precinct_normalization_audit.csv not found.")
+
+                st.markdown("### 🗺️ Precinct Crosswalk Outputs")
+                cw_summary_path = "outputs/precinct_crosswalk/crosswalk_validation_summary.md"
+                if os.path.exists(cw_summary_path):
+                    with open(cw_summary_path, "r", encoding="utf-8") as f:
+                        st.markdown(f.read())
+
+
+
