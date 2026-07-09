@@ -1279,8 +1279,9 @@ with tab5:
         uses_mock = False
         if active_contest_file:
             acf_lower = active_contest_file.replace("\\", "/").lower()
-            if "tests/" in acf_lower or "fixtures/" in acf_lower or "mock" in acf_lower or "test" in acf_lower:
+            if "tests/" in acf_lower or "fixtures/" in acf_lower or "mock" in acf_lower or ("test" in acf_lower and "contest" not in acf_lower):
                 uses_mock = True
+
             elif os.path.exists(active_contest_file) and os.path.getsize(active_contest_file) < 15000:
                 try:
                     df_c = pd.read_csv(active_contest_file, nrows=3)

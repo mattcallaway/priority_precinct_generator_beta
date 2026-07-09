@@ -146,11 +146,12 @@ def find_voter_geo_columns(df, overrides=None):
     cols = {c.lower().strip(): c for c in df.columns}
     
     geo_mappings = {
-        'supervisorial': ['supervisorial_district', 'supervisorial district', 'supervisorial', 'supervisor', 'sup_dist', 'sd', 'supervisor district'],
+        'supervisorial': ['supervisorial_district', 'supervisorial district', 'supervisorial', 'countysupervisorname', 'countysupervisor', 'supervisorname', 'supervisor', 'sup_dist', 'supervisor district'],
         'assembly': ['assembly_district', 'assembly district', 'assembly', 'ad', 'assembly_dist'],
-        'senate': ['senate_district', 'senate district', 'senate', 'sd_senate', 'sen', 'senate_dist'],
+        'senate': ['senate_district', 'senate district', 'senate', 'sd', 'sd_senate', 'sen', 'senate_dist'],
         'congressional': ['congressional_district', 'congressional district', 'congressional', 'cd', 'congress', 'congress_dist'],
         'city': ['city', 'mcity', 'municipality', 'town'],
+
         'city_council': ['city_council', 'city council', 'city_council_district', 'city council district', 'council_district', 'council'],
         'school': ['school_district', 'school district', 'school', 'school_dist'],
         'water': ['water_district', 'water district', 'water', 'water_dist'],
@@ -2014,8 +2015,9 @@ def run_pipeline(weights=None, target_params=None, allow_mock=False, county="Son
             if path:
                 p_lower = path.replace("\\", "/").lower()
                 is_mock = False
-                if "tests/" in p_lower or "fixtures/" in p_lower or "mock" in p_lower or "test" in p_lower:
+                if "tests/" in p_lower or "fixtures/" in p_lower or "mock" in p_lower or ("test" in p_lower and "contest" not in p_lower):
                     is_mock = True
+
                 elif os.path.exists(path) and os.path.getsize(path) < 15000:
                     try:
                         if path.endswith(".csv"):
