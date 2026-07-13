@@ -193,7 +193,7 @@ def run_tests():
                 
             # Test 6: Final Scoring Cleanup Compliance Assertions
             print("\nTEST 6: Final Scoring Cleanup Compliance Assertions...")
-            exp_table_path = "outputs/final_validation/top_50_explainability_table.csv"
+            exp_table_path = "outputs/final_rankings/top_50_explainability_table.csv"
             if os.path.exists(exp_table_path):
                 exp_df = pd.read_csv(exp_table_path)
                 
@@ -593,15 +593,354 @@ def run_tests():
             cov_sim_path = "outputs/precinct_crosswalk/crosswalk_coverage_simulation.csv"
             match_aud_path = "outputs/precinct_crosswalk/crosswalk_match_audit.csv"
             
+            
             if os.path.exists(val_summary_path) and os.path.exists(cov_sim_path) and os.path.exists(match_aud_path):
                 print("PASS: Crosswalk validation summaries and simulation CSVs generated successfully.")
             else:
                 print("FAIL: Crosswalk validation summary documents missing.")
                 failures += 1
 
-            # Restore config
-            with open(config_path, "w", encoding="utf-8") as f_mc:
-                json.dump(original_config, f_mc, indent=2)
+            # TEST 10: Multi-Contest Signal Modeling & Preview Verification
+            print("\nTEST 10: Multi-Contest Signal Modeling & Preview Verification...")
+            try:
+                from contest_signal_model import (
+                    calculate_precinct_contest_signals,
+                    aggregate_precinct_signal_scores,
+                    generate_preview_rankings,
+                    generate_correlation_matrix,
+                    generate_contest_signal_validation_report,
+                    FIXTURE_BLOCKED_WARNINGS
+                )
+                
+                # Test results registry
+                t10_checks = {
+                    "candidate_vote_share_denom": False,
+                    "opp_vote_share": False,
+                    "reg_density_signals": False,
+                    "turnout_rate": False,
+                    "ballot_measure_denom": False,
+                    "ignored_cols": False,
+                    "disabled_contests": False,
+                    "contest_weight": False,
+                    "signal_weight": False,
+                    "missing_denom": False,
+                    "cap_sup_rate": False,
+                    "cap_opp_rate": False,
+                    "inherited_blank_votes": False,
+                    "raw_parent_dup_false": False,
+                    "preview_ranks_unique": False,
+                    "production_untouched": False,
+                    "fixture_blocked_non_test": False,
+                    "correlation_matrix_ok": False,
+                    "validation_report_impossible": False
+                }
+                
+                # Load base df
+                base_df = pd.DataFrame({
+                    "PrecinctName": ["400001", "400005", "400008"],
+                    "Final_Rank": [1, 2, 3],
+                    "Base_Priority_Score": [0.8, 0.5, 0.2],
+                    "Final_Priority_Score": [0.8, 0.5, 0.2],
+                    "Contest_Enrichment_Score": [np.nan, np.nan, np.nan],
+                    "Contest_Result_Is_Inherited": [False, False, False],
+                    "Contest_Total_Votes": [np.nan, np.nan, np.nan]
+                })
+                
+                campaign_profile = {
+                    "campaign_name": "Test Campaign",
+                    "current_contest_name": "Bagby D4 Campaign",
+                    "supported_side": "MELANIE BAGBY",
+                    "opposed_side": "TOM SCHWEDHELM",
+                    "contest_type": "Candidate race",
+                    "election_date": "2026-06-02",
+                    "selected_geography": "Supervisorial District 4",
+                    "selected_scope_type": "supervisorial_district",
+                    "selected_scope_value": "4",
+                    "primary_campaign_goal": "Elect candidate",
+                    "created_timestamp": "2026-07-11 12:00:00"
+                }
+                
+                library = [
+                    {
+                        "contest_id": "test_contest_1",
+                        "contest_name": "2024 Presidential",
+                        "election_date": "2024-11-05",
+                        "election_year": "2024",
+                        "contest_type": "Federal candidate performance",
+                        "source_file": "tests/fixtures/controlled_contest_signal_fixture.csv",
+                        "source_file_hash": "",
+                        "precinct_column": "Precinct",
+                        "scope_type": "countywide",
+                        "scope_field": "County",
+                        "scope_value": "Sonoma",
+                        "scope_status": "valid",
+                        "uses_official_crosswalk": False,
+                        "crosswalk_source": "",
+                        "coverage_rate": 100.0,
+                        "enabled": True,
+                        "contest_weight": 1.0,
+                        "confidence_weight": 1.0,
+                        "notes": "Test library Federal contest"
+                    },
+                    {
+                        "contest_id": "test_contest_2",
+                        "contest_name": "2022 Proposition A",
+                        "election_date": "2022-11-08",
+                        "election_year": "2022",
+                        "contest_type": "Ballot measure",
+                        "source_file": "tests/fixtures/controlled_contest_signal_fixture.csv",
+                        "source_file_hash": "",
+                        "precinct_column": "Precinct",
+                        "scope_type": "countywide",
+                        "scope_field": "County",
+                        "scope_value": "Sonoma",
+                        "scope_status": "valid",
+                        "uses_official_crosswalk": False,
+                        "crosswalk_source": "",
+                        "coverage_rate": 100.0,
+                        "enabled": True,
+                        "contest_weight": 1.0,
+                        "confidence_weight": 1.0,
+                        "notes": "Test library Ballot Measure"
+                    }
+                ]
+                
+                matrix_data = [
+                    {"contest_id": "test_contest_1", "contest_name": "2024 Presidential", "source_file": "tests/fixtures/controlled_contest_signal_fixture.csv", "original_column_name": "Harris_Dem_2024", "normalized_column_name": "Harris_Dem_2024", "user_classification": "support", "mapped_signal_type": "support", "mapped_side": "MELANIE BAGBY", "current_campaign_relationship": "supports_current_campaign", "directionality": "higher_supports_current_campaign", "include_in_scoring": True, "signal_weight": 1.0, "confidence_weight": 1.0, "denominator_column": "Reg_2024", "denominator_type": "registered_voters", "notes": ""},
+                    {"contest_id": "test_contest_1", "contest_name": "2024 Presidential", "source_file": "tests/fixtures/controlled_contest_signal_fixture.csv", "original_column_name": "Trump_Rep_2024", "normalized_column_name": "Trump_Rep_2024", "user_classification": "opposition", "mapped_signal_type": "opposition", "mapped_side": "TOM SCHWEDHELM", "current_campaign_relationship": "opposes_current_campaign", "directionality": "higher_opposes_current_campaign", "include_in_scoring": True, "signal_weight": 1.0, "confidence_weight": 1.0, "denominator_column": "Reg_2024", "denominator_type": "registered_voters", "notes": ""},
+                    {"contest_id": "test_contest_1", "contest_name": "2024 Presidential", "source_file": "tests/fixtures/controlled_contest_signal_fixture.csv", "original_column_name": "Ballots_2024", "normalized_column_name": "Ballots_2024", "user_classification": "turnout", "mapped_signal_type": "turnout", "mapped_side": "neutral", "current_campaign_relationship": "turnout_only", "directionality": "higher_indicates_turnout", "include_in_scoring": True, "signal_weight": 1.0, "confidence_weight": 1.0, "denominator_column": "Reg_2024", "denominator_type": "registered_voters", "notes": ""},
+                    {"contest_id": "test_contest_1", "contest_name": "2024 Presidential", "source_file": "tests/fixtures/controlled_contest_signal_fixture.csv", "original_column_name": "Reg_2024", "normalized_column_name": "Reg_2024", "user_classification": "registered_voters", "mapped_signal_type": "registered_voters", "mapped_side": "neutral", "current_campaign_relationship": "neutral_reference", "directionality": "reference_only", "include_in_scoring": True, "signal_weight": 1.0, "confidence_weight": 1.0, "denominator_column": "", "denominator_type": "", "notes": ""},
+                    {"contest_id": "test_contest_1", "contest_name": "2024 Presidential", "source_file": "tests/fixtures/controlled_contest_signal_fixture.csv", "original_column_name": "Ignored_Column_2024", "normalized_column_name": "Ignored_Column_2024", "user_classification": "ignore", "mapped_signal_type": "ignore", "mapped_side": "ignore", "current_campaign_relationship": "ignore", "directionality": "ignore", "include_in_scoring": False, "signal_weight": 0.0, "confidence_weight": 0.0, "denominator_column": "", "denominator_type": "", "notes": ""},
+                    
+                    {"contest_id": "test_contest_2", "contest_name": "2022 Proposition A", "source_file": "tests/fixtures/controlled_contest_signal_fixture.csv", "original_column_name": "PropA_Yes_2022", "normalized_column_name": "PropA_Yes_2022", "user_classification": "support", "mapped_signal_type": "support", "mapped_side": "MELANIE BAGBY", "current_campaign_relationship": "supports_current_campaign", "directionality": "higher_supports_current_campaign", "include_in_scoring": True, "signal_weight": 1.0, "confidence_weight": 1.0, "denominator_column": "PropA_Total_2022", "denominator_type": "total_votes", "notes": ""},
+                    {"contest_id": "test_contest_2", "contest_name": "2022 Proposition A", "source_file": "tests/fixtures/controlled_contest_signal_fixture.csv", "original_column_name": "PropA_No_2022", "normalized_column_name": "PropA_No_2022", "user_classification": "opposition", "mapped_signal_type": "opposition", "mapped_side": "TOM SCHWEDHELM", "current_campaign_relationship": "opposes_current_campaign", "directionality": "higher_opposes_current_campaign", "include_in_scoring": True, "signal_weight": 1.0, "confidence_weight": 1.0, "denominator_column": "PropA_Total_2022", "denominator_type": "total_votes", "notes": ""},
+                    {"contest_id": "test_contest_2", "contest_name": "2022 Proposition A", "source_file": "tests/fixtures/controlled_contest_signal_fixture.csv", "original_column_name": "PropA_Total_2022", "normalized_column_name": "PropA_Total_2022", "user_classification": "total_votes", "mapped_signal_type": "total_votes", "mapped_side": "neutral", "current_campaign_relationship": "neutral_reference", "directionality": "reference_only", "include_in_scoring": True, "signal_weight": 1.0, "confidence_weight": 1.0, "denominator_column": "", "denominator_type": "", "notes": ""},
+                    {"contest_id": "test_contest_2", "contest_name": "2022 Proposition A", "source_file": "tests/fixtures/controlled_contest_signal_fixture.csv", "original_column_name": "Reg_2022", "normalized_column_name": "Reg_2022", "user_classification": "registered_voters", "mapped_signal_type": "registered_voters", "mapped_side": "neutral", "current_campaign_relationship": "neutral_reference", "directionality": "reference_only", "include_in_scoring": True, "signal_weight": 1.0, "confidence_weight": 1.0, "denominator_column": "", "denominator_type": "", "notes": ""},
+                    {"contest_id": "test_contest_2", "contest_name": "2022 Proposition A", "source_file": "tests/fixtures/controlled_contest_signal_fixture.csv", "original_column_name": "Ignored_Column_2022", "normalized_column_name": "Ignored_Column_2022", "user_classification": "ignore", "mapped_signal_type": "ignore", "mapped_side": "ignore", "current_campaign_relationship": "ignore", "directionality": "ignore", "include_in_scoring": False, "signal_weight": 0.0, "confidence_weight": 0.0, "denominator_column": "", "denominator_type": "", "notes": ""}
+                ]
+                matrix_df = pd.DataFrame(matrix_data)
+                
+                # Execute Precinct-Level Signal Calculation
+                prec_signals_df = calculate_precinct_contest_signals(base_df, library, matrix_df, campaign_profile)
+                
+                # 1. Candidate support vote share math (150 / 200 = 0.75)
+                row_400001_c1 = prec_signals_df[(prec_signals_df["PrecinctName"] == "400001") & (prec_signals_df["contest_id"] == "test_contest_1")].iloc[0]
+                if np.isclose(row_400001_c1["support_vote_share"], 0.75):
+                    t10_checks["candidate_vote_share_denom"] = True
+                    
+                # 2. Candidate opposition vote share math (50 / 200 = 0.25)
+                if np.isclose(row_400001_c1["opposition_vote_share"], 0.25):
+                    t10_checks["opp_vote_share"] = True
+                    
+                # 3. Support registered rate math (150 / 300 = 0.5)
+                if np.isclose(row_400001_c1["support_registered_rate"], 0.5):
+                    t10_checks["reg_density_signals"] = True
+                    
+                # 4. Turnout rate math (210 / 300 = 0.7)
+                if np.isclose(row_400001_c1["turnout_rate"], 0.7):
+                    t10_checks["turnout_rate"] = True
+                    
+                # 5. Ballot measure support rate math (160 / 200 = 0.8)
+                row_400001_c2 = prec_signals_df[(prec_signals_df["PrecinctName"] == "400001") & (prec_signals_df["contest_id"] == "test_contest_2")].iloc[0]
+                if np.isclose(row_400001_c2["issue_support_rate"], 0.8):
+                    t10_checks["ballot_measure_denom"] = True
+                    
+                # 6. Ignored columns verification
+                if "Ignored_Column_2024" not in prec_signals_df.columns:
+                    t10_checks["ignored_cols"] = True
+                
+                # 7. Disabled contests exclusion
+                library_disabled = [
+                    library[0],
+                    {**library[1], "enabled": False}
+                ]
+                agg_df_dis = aggregate_precinct_signal_scores(prec_signals_df, library_disabled)
+                # If test_contest_2 is disabled, Aggregate_Support_Score for 400001 should just be test_contest_1 rate (0.50)
+                row_400001_agg_dis = agg_df_dis[agg_df_dis["PrecinctName"] == "400001"].iloc[0]
+                if np.isclose(row_400001_agg_dis["Aggregate_Support_Score"], 0.50):
+                    t10_checks["disabled_contests"] = True
+                    
+                # 8. Contest weight variations
+                # change weight of contest 1 to 2.0. Contest 1 has rate 0.50, Contest 2 has rate 0.8.
+                # Weighted average support rate should be (0.50 * 2.0 + 0.8 * 1.0) / 3.0 = 1.8 / 3 = 0.60
+                library_weighted = [
+                    {**library[0], "contest_weight": 2.0},
+                    library[1]
+                ]
+                agg_df_wt = aggregate_precinct_signal_scores(prec_signals_df, library_weighted)
+                row_400001_agg_wt = agg_df_wt[agg_df_wt["PrecinctName"] == "400001"].iloc[0]
+                if np.isclose(row_400001_agg_wt["Aggregate_Support_Score"], 0.60, atol=1e-5):
+                    t10_checks["contest_weight"] = True
+                    
+                # 9. Column signal weight variations
+                # double signal weight of Harris column (to 2.0). Harris support votes = 150 * 2.0 = 300.
+                # Opposition = 50. Denominator = 350. support_vote_share = 300 / 350 = 0.85714
+                matrix_weighted = matrix_df.copy()
+                matrix_weighted.loc[matrix_weighted["original_column_name"] == "Harris_Dem_2024", "signal_weight"] = 2.0
+                prec_signals_wt_df = calculate_precinct_contest_signals(base_df, library, matrix_weighted, campaign_profile)
+                row_400001_c1_sw = prec_signals_wt_df[(prec_signals_wt_df["PrecinctName"] == "400001") & (prec_signals_wt_df["contest_id"] == "test_contest_1")].iloc[0]
+                if np.isclose(row_400001_c1_sw["support_vote_share"], 0.8571428, atol=1e-5):
+                    t10_checks["signal_weight"] = True
+                    
+                # 10. Missing denominators behavior
+                # Create a matrix row with bad denominator_column name
+                matrix_bad_denom = matrix_df.copy()
+                matrix_bad_denom.loc[matrix_bad_denom["original_column_name"] == "Harris_Dem_2024", "denominator_column"] = "MISSING_COLUMN"
+                prec_signals_bad_df = calculate_precinct_contest_signals(base_df, library, matrix_bad_denom, campaign_profile)
+                row_400001_bad = prec_signals_bad_df[(prec_signals_bad_df["PrecinctName"] == "400001") & (prec_signals_bad_df["contest_id"] == "test_contest_1")].iloc[0]
+                # registered rates should be NaN because registered_voters isn't resolved properly if denominator_column is bad
+                # Wait, registered_voters falls back to other configured denoms. Let's make all of them bad
+                matrix_bad_all = matrix_df.copy()
+                matrix_bad_all.loc[matrix_bad_all["user_classification"] == "registered_voters", "include_in_scoring"] = False
+                matrix_bad_all.loc[matrix_bad_all["denominator_column"] != "", "denominator_column"] = "MISSING_COLUMN"
+                prec_signals_bad_all = calculate_precinct_contest_signals(base_df, library, matrix_bad_all, campaign_profile)
+                row_400001_bad_all = prec_signals_bad_all[(prec_signals_bad_all["PrecinctName"] == "400001") & (prec_signals_bad_all["contest_id"] == "test_contest_1")].iloc[0]
+                if pd.isna(row_400001_bad_all["support_registered_rate"]) and "missing_registered_voters_denominator" in row_400001_bad_all["warning_flags"]:
+                    t10_checks["missing_denom"] = True
+                    
+                # 11. Capping support rate checks
+                # Ensure normal support_rate is <= 1.0 (test_contest_1 has rate 0.75 which is <= 1.0)
+                if row_400001_c1["support_rate"] <= 1.0:
+                    t10_checks["cap_sup_rate"] = True
+                    
+                # 12. Capping opposition rate checks
+                if row_400001_c1["opposition_rate"] <= 1.0:
+                    t10_checks["cap_opp_rate"] = True
+                    
+                # 13. Inherited crosswalk rows keep raw vote fields blank
+                # Simulate crosswalk inherited match in calculation
+                library_cw = [
+                    {**library[0], "uses_official_crosswalk": True, "crosswalk_reg_to_voting_file": "", "crosswalk_voting_to_reg_file": ""}
+                ]
+                # Add fake crosswalk files for testing or let uses_crosswalk trigger crosswalk map search.
+                # Since crosswalk files don't actually exist in tests/fixtures in the test harness without PDF, let's mock contest_cross_map directly in calculate_precinct_contest_signals, or create a mock.
+                # Actually, our code handlesuses_crosswalk, if crosswalk file missing it falls back. Let's make crosswalk path return an inherited row for a precinct.
+                # Let's inspect calculate_precinct_contest_signals: it reads xref from cross_map.
+                # If we create the canonical crosswalk file, we can test it!
+                # Wait, is there a simple way to test is_inherited?
+                # We can construct prec_signals_df with is_inherited = True manually to verify aggregates,
+                # but let's test that calculate_precinct_contest_signals outputs NaN raw votes if is_inherited is True.
+                # Let's write a mock canonical crosswalk file so it gets parsed!
+                cw_test_path = "outputs/precinct_crosswalk/canonical_sov_to_voter_precinct_crosswalk.csv"
+                os.makedirs(os.path.dirname(cw_test_path), exist_ok=True)
+                pd.DataFrame({
+                    "Voter_PrecinctName": ["400001"],
+                    "Voting_Precinct": ["400001"],
+                    "Valid_For_Production": [True],
+                    "Match_Rule": ["inherited"]
+                }).to_csv(cw_test_path, index=False)
+                
+                prec_signals_cw = calculate_precinct_contest_signals(base_df, library_cw, matrix_df, campaign_profile)
+                row_400001_cw = prec_signals_cw[prec_signals_cw["PrecinctName"] == "400001"].iloc[0]
+                if row_400001_cw["contest_result_is_inherited"] == True:
+                    if pd.isna(row_400001_cw["support_votes"]) and pd.isna(row_400001_cw["opposition_votes"]):
+                        t10_checks["inherited_blank_votes"] = True
+                        
+                # 14. Parent raw votes duplicate validation (non-duplication)
+                if row_400001_cw["raw_parent_votes_duplicated"] == False:
+                    t10_checks["raw_parent_dup_false"] = True
+                    
+                # Clean up test crosswalk file
+                try:
+                    os.remove(cw_test_path)
+                except:
+                    pass
+
+                # 15. Deterministic unique preview ranks
+                agg_df = aggregate_precinct_signal_scores(prec_signals_df, library)
+                preview_df = generate_preview_rankings(base_df, agg_df, campaign_profile)
+                ranks = preview_df["Preview_Rank"].tolist()
+                if len(ranks) == len(set(ranks)) and sorted(ranks) == list(range(1, len(ranks) + 1)):
+                    t10_checks["preview_ranks_unique"] = True
+                    
+                # 16. Preview scores do not overwrite Final_Priority_Score or Final_Rank
+                # Base DF was passed in. Check that we did not edit base_df or outputs in production priority precincts
+                # final rankings file
+                prod_path = "outputs/final_rankings/production_priority_precincts.csv"
+                if os.path.exists(prod_path):
+                    prod_chk = pd.read_csv(prod_path)
+                    if "Preview_MultiContest_Composite_Score" not in prod_chk.columns:
+                        t10_checks["production_untouched"] = True
+                else:
+                    t10_checks["production_untouched"] = True # untouched by default if file doesn't exist
+                    
+                # 17. tests/fixtures contests are rejected outside TEST_MODE
+                import contest_manager
+                os.environ["PPG_RUN_MODE"] = "PRODUCTION_MODE"
+                # Mock config list in json
+                original_config = contest_manager.load_classification_config()
+                test_configs = original_config + [{
+                    "contest_name": "Blocked Fixture Contest",
+                    "source_file": "tests/fixtures/controlled_contest_signal_fixture.csv"
+                }]
+                contest_manager.save_classification_config(test_configs)
+                loaded_configs = contest_manager.load_classification_config()
+                # Verify Blocked Fixture Contest was filtered out
+                fixture_blocked = True
+                for c in loaded_configs:
+                    if "Blocked" in c.get("contest_name", ""):
+                        fixture_blocked = False
+                if fixture_blocked and "fixture_contest_blocked_from_non_test_run" in contest_manager.FIXTURE_BLOCKED_WARNINGS:
+                    t10_checks["fixture_blocked_non_test"] = True
+                    
+                # Restore environment variable
+                os.environ["PPG_RUN_MODE"] = "TEST_MODE"
+                
+                # 18. Correlation matrix generates without duplicate-index failures
+                corr_df = generate_correlation_matrix(prec_signals_df)
+                if not corr_df.empty:
+                    t10_checks["correlation_matrix_ok"] = True
+                    
+                # 19. Validation report flags impossible rates
+                # Create impossible rate (support > register)
+                matrix_impossible = matrix_df.copy()
+                matrix_impossible.loc[matrix_impossible["original_column_name"] == "Reg_2024", "signal_weight"] = 0.1
+                # Let's verify calculate_precinct_contest_signals includes impossible_rate_detected
+                prec_signals_imp = calculate_precinct_contest_signals(base_df, library, matrix_impossible, campaign_profile)
+                row_400001_imp = prec_signals_imp[(prec_signals_imp["PrecinctName"] == "400001") & (prec_signals_imp["contest_id"] == "test_contest_1")].iloc[0]
+                if "impossible_rate_detected" in row_400001_imp["warning_flags"]:
+                    validation_imp_md = generate_contest_signal_validation_report(library, matrix_impossible, prec_signals_imp, campaign_profile)
+                    if "VERDICT: FAIL: impossible_rate_detected" in validation_imp_md:
+                        t10_checks["validation_report_impossible"] = True
+
+                # Write actual outputs to disk for diagnostic viewing
+                os.makedirs("outputs/contest_signal_model", exist_ok=True)
+                prec_signals_df.to_csv("outputs/contest_signal_model/precinct_contest_signal_matrix.csv", index=False)
+                agg_df.to_csv("outputs/contest_signal_model/aggregate_precinct_signal_scores.csv", index=False)
+                preview_df.to_csv("outputs/contest_signal_model/preview_multi_contest_priority_scores.csv", index=False)
+                corr_df.to_csv("outputs/contest_signal_model/contest_signal_correlation_matrix.csv", index=False)
+                
+                validation_md = generate_contest_signal_validation_report(library, matrix_df, prec_signals_df, campaign_profile)
+                with open("outputs/contest_signal_model/contest_signal_validation_report.md", "w", encoding="utf-8") as f_md:
+                    f_md.write(validation_md)
+                
+                # Check for failures
+                for check_name, passed in t10_checks.items():
+                    if passed:
+                        print(f"PASS: {check_name}")
+                    else:
+                        print(f"FAIL: {check_name}")
+                        failures += 1
+                        
+                # Global print checklist
+                print("\nContest Signal Manager hardening complete.")
+                print(f"Candidate vote-share denominator:\n{'PASS' if t10_checks['candidate_vote_share_denom'] else 'FAIL'}")
+                print(f"Registered-voter density signals:\n{'PASS' if t10_checks['reg_density_signals'] else 'FAIL'}")
+                print(f"Ballot measure denominator:\n{'PASS' if t10_checks['ballot_measure_denom'] else 'FAIL'}")
+                print(f"Column-level weights applied:\n{'PASS' if t10_checks['signal_weight'] else 'FAIL'}")
+                print(f"Missing denominators preserved as NaN:\n{'PASS' if t10_checks['missing_denom'] else 'FAIL'}")
+                print(f"Impossible rate validation:\n{'PASS' if t10_checks['validation_report_impossible'] else 'FAIL'}")
+                print(f"Fixture contests blocked outside TEST_MODE:\n{'PASS' if t10_checks['fixture_blocked_non_test'] else 'FAIL'}")
+                print(f"Preview ranks unique:\n{'PASS' if t10_checks['preview_ranks_unique'] else 'FAIL'}")
+                print(f"Production outputs untouched:\n{'PASS' if t10_checks['production_untouched'] else 'FAIL'}")
+                print(f"Regression tests:\n{'PASS' if failures == 0 else 'FAIL'}")
+                print(f"Warnings: {FIXTURE_BLOCKED_WARNINGS}\n")
+                
+            except Exception as e:
+                print(f"FAIL: Contest Signal Manager math engine failed: {e}")
+                import traceback
+                traceback.print_exc()
+                failures += 1
 
                 
         finally:

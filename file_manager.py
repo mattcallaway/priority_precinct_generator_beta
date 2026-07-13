@@ -17,7 +17,9 @@ SYSTEM_ROLES = {
     "City Shapes": "city_shapes.zip",
     "Assembly Shapes": "assembly_shapes.zip",
     "Supervisor Shapes": "supervisorial_shapes.zip",
-    "Contest Data": "contest_data_input"  # prefix, extension matches original
+    "Contest Data": "contest_data_input",  # prefix, extension matches original
+    "Regular-to-Voting Crosswalk PDF (ewmr010)": "ewmr010_regabsvotpctxref_2026-06-02.pdf",
+    "Voting-to-Regular Crosswalk PDF (ewmr008)": "ewmr008_votabsregpctxref_2026-06-02.pdf"
 }
 
 FILE_TO_ROLE = {v: k for k, v in SYSTEM_ROLES.items() if k != "Contest Data"}
@@ -189,10 +191,11 @@ def assign_tag_role(filename, role, data_dir=DATA_DIR):
         dest_filename = SYSTEM_ROLES.get(role)
         dest_path = os.path.join(data_dir, dest_filename)
         
-    try:
-        shutil.copy2(src_path, dest_path)
-    except Exception as e:
-        return False, f"Failed to copy file to system path: {str(e)}"
+    if os.path.abspath(src_path) != os.path.abspath(dest_path):
+        try:
+            shutil.copy2(src_path, dest_path)
+        except Exception as e:
+            return False, f"Failed to copy file to system path: {str(e)}"
         
     if old_role and old_role != role:
         delete_system_copy(old_role, data_dir)

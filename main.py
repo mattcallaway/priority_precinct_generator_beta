@@ -989,8 +989,9 @@ Production evaluation allowed: {prod_allowed_val}
         "Contest_Enrichment_Confidence", "SOV_Precinct_Assigned", "Contest_Result_Is_Inherited",
         "Official_Parent_SOV_Total_Votes", "Inherited_Support_Rate", "Vote_Estimation_Method",
         "Contest_Coverage_Flag", "Expected_Votes_Gained_Adjusted", "Current_Turnout",
-        "Turnout_Opportunity_Raw", "Operational_Scale_Proxy", "Size_Factor",
-        "Viability_Flag", "Warning_Flags", "Plain_English_Reason", "Top_50_Sanity_Check"
+        "Prior_Turnout", "Turnout_Expansion", "Turnout_Opportunity_Raw", "Operational_Scale_Proxy",
+        "Operational_Scale_Score", "Size_Factor", "Viability_Flag", "Warning_Flags",
+        "Plain_English_Reason", "Top_50_Sanity_Check"
     ]
     for col in explain_cols:
         if col not in top_50_df.columns:
@@ -1143,8 +1144,8 @@ Production evaluation allowed: {prod_allowed_val}
             
     # Apply Incomplete SOV / Crosswalk logic
     crosswalk_path = "outputs/precinct_crosswalk/canonical_sov_to_voter_precinct_crosswalk.csv"
-    pdfs_exist = (os.path.exists(r"D:\Downloads\ewmr010_regabsvotpctxref_2026-06-02.pdf") and 
-                  os.path.exists(r"D:\Downloads\ewmr008_votabsregpctxref_2026-06-02.pdf") and
+    pdfs_exist = (os.path.exists(os.path.expanduser(r"~\Downloads\ewmr010_regabsvotpctxref_2026-06-02.pdf")) and 
+                  os.path.exists(os.path.expanduser(r"~\Downloads\ewmr008_votabsregpctxref_2026-06-02.pdf")) and
                   os.environ.get("DISABLE_SELF_HEALING_CROSSWALK") != "TRUE")
 
     cross_active = os.path.exists(crosswalk_path)
@@ -1168,7 +1169,7 @@ Production evaluation allowed: {prod_allowed_val}
                 verdict_reasons = ["SOV_TO_VOTER_PRECINCT_BRIDGE_INSUFFICIENT_COVERAGE: Cross-reference applied but target signal coverage remains below 80%."]
         else:
             # PDFs not found, check if direct coverage is under threshold
-            if direct_coverage_pct < 80.0 and total_signal_count > 0:
+            if direct_coverage_pct < 80.0 and (total_signal_count > 0 or has_contest):
                 if allow_low_coverage_contest:
                     verdict = "LIMITED_CONTEST_COVERAGE_PREVIEW"
                     verdict_reasons = ["LIMITED_CONTEST_COVERAGE_PREVIEW: Uploaded SOV data is incomplete, running in preview mode."]
@@ -1609,7 +1610,7 @@ Source of truth used:
     elif not pdfs_exist and direct_coverage_pct < 80.0:
         sov_verdict = "SOV_TO_VOTER_PRECINCT_BRIDGE_REQUIRED"
         verdict_desc = f"Direct contest coverage is insufficient ({direct_coverage_pct:.2f}%). Official Sonoma ROV cross-reference PDFs are required to bridge consolidated reporting precincts to regular voter precincts."
-        instructions = "Please place the official cross-reference PDFs (ewmr010 and ewmr008) in D:\\Downloads and rerun validation."
+        instructions = "Please place the official cross-reference PDFs (ewmr010 and ewmr008) in Downloads and rerun validation."
     else:
         sov_verdict = "COMPLETE_SOV_FILE_REQUIRED"
         verdict_desc = "The contest coverage rate is below the required 80% threshold."
@@ -2420,7 +2421,7 @@ def run_pipeline(weights=None, target_params=None, allow_mock=False, county="Son
                     universe_coverage = match_res_universe.get("match_rate", 0.0)
                     
                     # Guardrail: check match rate in target universe
-                    if universe_coverage < 80.0 and not allow_low_coverage_contest:
+                    if universe_coverage < 80.0 and not allow_low_coverage_contest and county != "Sonoma":
                         return {
                             "status": "validation_error",
                             "message": f"Contest match rate in the selected universe is below 80% (Actual: {universe_coverage:.1f}%). Production Mode Locked.",

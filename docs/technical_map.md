@@ -1,86 +1,104 @@
-# 🛠️ Developer Technical Map
+# 🛠️ Master Technical Map & Architectural Guide
 
-This document outlines the system data model, file pipelines, and internal function interfaces for developers maintaining or modifying the Priority Precinct Generator.
+This document maps out the Priority Precinct Generator (PPG) system architecture, including module responsibilities, mathematical structures, database schemas, and data pipelines.
 
 ---
 
-## 🔄 Core Pipeline Data Flow
+## 🔄 Core Pipeline & System Data Flow
 
 ```mermaid
 graph TD
-    V[voter_file.csv] -->|Load & Map Columns| M[main.py: build_voter_flags]
-    M -->|PrecinctName Aggregation| A[Precinct Demographics Table]
+    %% Base Files
+    V[voter_file.csv] -->|Demographic Aggregation| M[main.py: build_voter_flags]
+    M -->|Precinct Demographics| B[Base Precinct Table]
     
-    A -->|Calculate Countywide Normalized Scores| CS[main.py: normalize_and_rank_precincts - Countywide]
+    %% SOV & Crosswalk
+    S[detail.csv SOV] -->|Clean Headers & Parse| CM[contest_manager.py: inspect_and_load_file]
+    PDF_REG[ewmr010_regabsvotpctxref_2026-06-02.pdf] -->|Parse PDF Lines| CW[build_precinct_crosswalk.py]
+    PDF_VOT[ewmr008_votabsregpctxref_2026-06-02.pdf] -->|Parse PDF Lines| CW
+    CW -->|Canonical Bridge CSV| Bridge[canonical_sov_to_voter_precinct_crosswalk.csv]
     
-    A -->|Apply target_params filters| U[Selected Universe Subset]
-    U -->|Calculate Selected Universe Normalized Scores| US[main.py: normalize_and_rank_precincts - Selected_Universe]
+    %% Signal Extraction & Blending
+    CM -->|Group & Normalise SOV Precincts| CSM[contest_signal_model.py: calculate_precinct_contest_signals]
+    Bridge -->|Map Voting to Regular Precincts| CSM
+    B -->|Base Demographic Scores| CSM
     
-    C[detail.csv] -->|Classify & Map| CM[contest_manager.py: normalize_contest_precincts]
-    CM -->|Generate Normalization Audit CSV| AUD[precinct_normalization_audit.csv]
-    
-    US -->|Direct Join on PrecinctName| J[Unified Target Matrix]
-    CM -->|Audited Normalization Join| E[Precinct Contest Metrics]
-    E -->|Direct Join on PrecinctName| J
-    
-    J -->|Run Enrichment Calculations| S[main.py: run_pipeline]
-    S -->|Generate Outputs & Log Overrides| F[outputs/final_rankings/]
+    %% Final Aggregates
+    CSM -->|Apply Column Weights| AGG[contest_signal_model.py: aggregate_precinct_signal_scores]
+    AGG -->|Deterministic unique ranking| PR[contest_signal_model.py: generate_preview_rankings]
+    PR -->|Preview Priority Score CSV & Validation Report| UI[Streamlit UI app.py]
 ```
 
 ---
 
-## 📄 File Profiles & Modules
+## ⚙️ Module Responsibilities & Decoupled Architecture
 
-### 1. `main.py`
-The central execution controller.
-* **`run_pipeline(...)`**: Accepts weights, geographical filters (`target_params`), contest file path, column mappings, and turnout settings. Standardizes logs, checks match rate benchmarks in the target universe, and exports final targeting sheets.
-* **`score_precincts(df, weights, has_prior_turnout, election_context, target_turnout_override, enforce_size_guardrail)`**: Computes turnout opportunity, size factor, and competitiveness shares.
-* **`normalize_and_rank_precincts(df, weights, scope_prefix)`**: Min-max normalizes scores and ranks precincts within the specified scope (Countywide vs Selected_Universe).
+The application is structured into isolated, decoupled modules:
 
-### 2. `contest_manager.py`
-Parses, cleans, and merges Statements of Votes.
-* **`normalize_contest_precincts(contest_df, contest_prec_col, voter_precincts, county, output_dir)`**: Restricts Sonoma format conversions (`74X -> 4X0`) to Sonoma County runs, logs all transformations row-by-row, and outputs `outputs/contest_data_manager/precinct_normalization_audit.csv`.
-* **`run_enrichment_calculations(...)`**: Standardizes keys, evaluates candidate/initiative/turnout contests, computes component scores (Support, Persuasion, Turnout, Issue Alignment), and aggregates the overall enrichment score.
+### 1. Central Core Controller (`main.py`)
+* **Role**: Orchestrates the baseline demographic priority pipeline, processes supervisorial, congressional, and assembly filtering, and normalizes scores.
+* **Sonoma Precinct Normalization**: Infers regular precinct names from 7-digit ROV keys (e.g. `0400001` -> `400001` or `4001`) dynamically to align data structures.
+
+### 2. State Machine & User Interface (`app.py`)
+* **Role**: Implements the Streamlit-based graphical user interface, manages Tab state routing, registers downloads, and runs file verification checkers.
+* **Tab Structures**:
+  * Tab 1: File Registry & core uploads.
+  * Tab 2: Municipal Shapefile boundary joins.
+  * Tab 3: Legislative District boundary shapefiles.
+  * Tab 4: Production Contest configuration and classification.
+  * Tab 5: Base scoring weighting, tiny precinct guardrails, and production execution.
+  * Tab 6: Contest Signal Manager preview scoring, library weighting, correlation plots, and validation output logs.
+
+### 3. File Registry & Lock Engine (`file_manager.py`)
+* **Role**: Validates checksums, formats file profile schemas, and copies files.
+* **Gotcha Guardrail**: Implements same-file path checks (`os.path.abspath`) to prevent recursive copy loops when user-assigned tags match standard files.
+
+### 4. Statement of Votes Ingestion Engine (`contest_manager.py`)
+* **Role**: Performs Statement of Votes (SOVs) ingestion, cleans headers, parses CSV structures, and saves the normalization log `precinct_normalization_audit.csv`.
+* **Hierarchical Header Parser**: Cleans multi-level headers (e.g., merged candidates in candidate performance rows) by scanning up to 5 leading rows for tabular structural indices.
+
+### 5. Contest Signal Manager Math Engine (`contest_signal_model.py`)
+* **Role**: Computes rates, applies column weights, performs composite score blending, generates correlation matrices, and formats validation report markdown files.
+* **Math Hardening**: Computes explicit, denominator-aware rates:
+  * **Candidate Vote Share**: $\text{support\_vote\_share} = \frac{\text{support}}{\text{support} + \text{opposition}}$
+  * **Registration Density**: $\text{support\_registered\_rate} = \frac{\text{support}}{\text{registered\_voters}}$
+  * **Turnout Rate**: $\text{turnout\_rate} = \frac{\text{ballots}}{\text{registered\_voters}}$
+  * **Ballot Measure Rate**: $\text{issue\_support\_rate} = \frac{\text{issue\_support}}{\text{measure\_total\_votes}}$
+* **Preserving Missing Data**: Any zero or missing denominator value yields `NaN` support rates, appending explicit flags like `missing_registered_voters_denominator` to prevent silent fallbacks.
+
+### 6. Bidirectional Crosswalk Compiler (`scratch/build_precinct_crosswalk.py`)
+* **Role**: Scans ROV PDF printouts using coordinate-bounding coordinates via `pdfplumber` to establish bidirectional lookups.
+* **Precision Keys**: Automatically trims `.0` float formatting from CSV outputs to ensure exact precinct code lookups.
 
 ---
 
-## 💾 System Data Models & Schemas
+## 📊 Database Schemas & Mapped Data Profiles
 
-### 1. Aligned Output Schema (34 Columns)
-Every prioritization report (CSV) contains:
-1. `PrecinctName`: Normalized precinct identifier.
-2. `Total_Voters`: Total registered voters in the precinct.
-3. `Base_Rank`: Rank within the selected universe based on demographics alone.
-4. `Final_Rank`: Blended rank within the selected universe.
-5. `Rank_Change`: Shift between demographic and production ranks.
-6. `Current_Turnout`: Current cycle turnout percentage.
-7. `Prior_Turnout`: Prior cycle turnout percentage.
-8. `Turnout_Dropoff`: Volatility drop-off rate.
-9. `Turnout_Expansion`: Distance to target turnout.
-10. `Turnout_Volatility`: Absolute difference between cycles.
-11. `Turnout_Opportunity_Raw`: Volatility weighted turnout value.
-12. `Expected_Votes_Gained`: Raw votes campaign can expand.
-13. `Expected_Votes_Gained_Adjusted`: Guardrail scaled expected votes.
-14. `Dem_Share`, `Rep_Share`, `NPP_Share`, `Other_Share`: Party composition shares.
-15. `Partisan_Competitiveness`: Major party competitiveness.
-16. `Operational_Scale_Proxy`: Natural log scale size proxy.
-17. `Operational_Scale_Score`: Normalized scale score.
-18. `True_Area_Density`: Registered voters per square mile.
-19. `True_Area_Density_Source`: GIS mapping indicator.
-20. `Contest_Support_Score`, `Contest_Persuasion_Score`, `Contest_Turnout_Score`, `Contest_Issue_Alignment_Score`: Component-level contest scores.
-21. `Contest_Confidence`: Match percentage of config weight.
-22. `Contest_Enrichment_Score`: Blended contest score.
-23. `Base_Priority_Score`, `Final_Priority_Score`: Unified target scores.
-24. `Viability_Flag`: Small precinct penalty label (`"viable"` vs `"too_small"`).
-25. `Contest_Coverage_Flag`: Status of contest coverage.
-26. `Geography_Source_Summary`, `Contest_Source_Summary`: Trace descriptions.
+### 1. Master Output Schema (34 Columns)
+Every production priority target file (`production_priority_precincts.csv`) outputs:
+1. `PrecinctName`: Normalized precinct key.
+2. `Total_Voters`: Registration size.
+3. `Base_Rank`: Demographic baseline target rank.
+4. `Final_Rank`: Unified target rank.
+5. `Rank_Change`: Shift metric.
+6. `Current_Turnout`, `Prior_Turnout`, `Turnout_Dropoff`, `Turnout_Expansion`, `Turnout_Volatility`: Voting history.
+7. `Turnout_Opportunity_Raw`, `Expected_Votes_Gained`, `Expected_Votes_Gained_Adjusted`: Opportunity targets.
+8. `Dem_Share`, `Rep_Share`, `NPP_Share`, `Other_Share`: Party indexes.
+9. `Partisan_Competitiveness`: Major party balance index.
+10. `Operational_Scale_Proxy`, `Operational_Scale_Score`: Concentration proxy.
+11. `True_Area_Density`, `True_Area_Density_Source`: Geospatial area density.
+12. `Contest_Support_Score`, `Contest_Persuasion_Score`, `Contest_Turnout_Score`, `Contest_Issue_Alignment_Score`: Active components.
+13. `Contest_Confidence`: Combined matching confidence metrics.
+14. `Contest_Enrichment_Score`: Blended contest returns value.
+15. `Base_Priority_Score`, `Final_Priority_Score`: Targeting scores.
+16. `Viability_Flag`, `Contest_Coverage_Flag`: Safety guardrail indicators.
+17. `Geography_Source_Summary`, `Contest_Source_Summary`: Trace logs.
 
-### 2. Diagnostics Breakdown Schema
-The breakdown file `outputs/07_scoring_breakdown.csv` includes all the columns above plus:
-* `Countywide_Base_Priority_Score`
-* `Countywide_Final_Priority_Score`
-* `Selected_Universe_Base_Priority_Score`
-* `Selected_Universe_Final_Priority_Score`
-* `Countywide_Base_Rank`
-* `Countywide_Final_Rank`
-* `Voter_Concentration_Proxy_Deprecated` (Alias for Operational_Scale_Proxy)
+### 2. Preview Score Schema (Tab 6 Output)
+Saves results into `preview_multi_contest_priority_scores.csv` including:
+* `Preview_MultiContest_Composite_Score`: Unified blended score.
+* `Preview_Rank`: Deterministic unique rankings.
+* `Preview_Baseline_Component`: Normalized demographic base score.
+* `Preview_Contest_Component`: Weighted active contest signals.
+* `Preview_Model_Coverage`: Match coverage metric.
+* `Preview_Warning_Flags`: Error indicators (`missing_vote_share_denominator` etc.).

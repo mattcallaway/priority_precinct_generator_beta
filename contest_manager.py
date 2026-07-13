@@ -335,10 +335,31 @@ def save_classification_config(config_list, output_dir=OUTPUT_DIR):
         json.dump(config_list, f, indent=2)
     return config_path
 
+FIXTURE_BLOCKED_WARNINGS = []
+
+def is_test_mode_active():
+    import sys
+    import os
+    env_mode = os.environ.get("PPG_RUN_MODE")
+    if env_mode == "TEST_MODE":
+        return True
+    if env_mode == "PRODUCTION_MODE":
+        return False
+    if any("run_audit_tests" in arg or "test_streamlit_app" in arg for arg in sys.argv):
+        return True
+    return False
+
+def is_fixture_path(path):
+    if not path:
+        return False
+    normalized = str(path).replace("\\", "/").lower()
+    return "tests/" in normalized or "tests/fixtures/" in normalized
+
 def load_classification_config(output_dir=OUTPUT_DIR):
+    global FIXTURE_BLOCKED_WARNINGS
     # Self-healing rebuild logic for Bagby file
     contest_file = "data/detail.csv"
-    is_test_run = any("run_audit_tests.py" in arg or "test_streamlit_app.py" in arg for arg in sys.argv)
+    is_test_run = is_test_mode_active()
     if os.path.exists(contest_file) and not is_test_run:
         try:
             df_check = pd.read_csv(contest_file, nrows=3)
@@ -398,6 +419,13 @@ def load_classification_config(output_dir=OUTPUT_DIR):
     for c in configs:
         if not isinstance(c, dict):
             continue
+            
+        src_file = c.get("source_file", "")
+        if is_fixture_path(src_file) and not is_test_mode_active():
+            if "fixture_contest_blocked_from_non_test_run" not in FIXTURE_BLOCKED_WARNINGS:
+                FIXTURE_BLOCKED_WARNINGS.append("fixture_contest_blocked_from_non_test_run")
+            continue
+            
         # Standardize new contest_name key
         if "contest_name" not in c and "name" in c:
             c["contest_name"] = c["name"]
@@ -538,17 +566,59 @@ def run_enrichment_calculations(base_scored_df, contest_df, contest_prec_col, co
     df_base = base_scored_df.copy()
     
     crosswalk_path = "outputs/precinct_crosswalk/canonical_sov_to_voter_precinct_crosswalk.csv"
-    if not os.path.exists(crosswalk_path) and os.environ.get("DISABLE_SELF_HEALING_CROSSWALK") != "TRUE":
-
-
-        if os.path.exists(r"D:\Downloads\ewmr010_regabsvotpctxref_2026-06-02.pdf") and os.path.exists(r"D:\Downloads\ewmr008_votabsregpctxref_2026-06-02.pdf"):
+    
+    reg_pdf = ""
+    voting_pdf = ""
+    if config:
+        if isinstance(config, list) and len(config) > 0:
+            first_rule = config[0]
+            reg_pdf = first_rule.get("crosswalk_reg_to_voting_file", "")
+            voting_pdf = first_rule.get("crosswalk_voting_to_reg_file", "")
+        elif isinstance(config, dict):
+            reg_pdf = config.get("crosswalk_reg_to_voting_file", "")
+            voting_pdf = config.get("crosswalk_voting_to_reg_file", "")
+    
+    reg_pdf_path = ""
+    if reg_pdf:
+        if os.path.exists(reg_pdf):
+            reg_pdf_path = reg_pdf
+        elif os.path.exists(os.path.join("data", os.path.basename(reg_pdf))):
+            reg_pdf_path = os.path.join("data", os.path.basename(reg_pdf))
+            
+    voting_pdf_path = ""
+    if voting_pdf:
+        if os.path.exists(voting_pdf):
+            voting_pdf_path = voting_pdf
+        elif os.path.exists(os.path.join("data", os.path.basename(voting_pdf))):
+            voting_pdf_path = os.path.join("data", os.path.basename(voting_pdf))
+            
+    if not reg_pdf_path:
+        default_reg = os.path.expanduser(r"~\Downloads\ewmr010_regabsvotpctxref_2026-06-02.pdf")
+        if os.path.exists(default_reg):
+            reg_pdf_path = default_reg
+    if not voting_pdf_path:
+        default_voting = os.path.expanduser(r"~\Downloads\ewmr008_votabsregpctxref_2026-06-02.pdf")
+        if os.path.exists(default_voting):
+            voting_pdf_path = default_voting
+            
+    if reg_pdf_path and voting_pdf_path and os.environ.get("DISABLE_SELF_HEALING_CROSSWALK") != "TRUE":
+        rebuild = not os.path.exists(crosswalk_path)
+        if not rebuild:
+            try:
+                out_mtime = os.path.getmtime(crosswalk_path)
+                if os.path.getmtime(reg_pdf_path) > out_mtime or os.path.getmtime(voting_pdf_path) > out_mtime:
+                    rebuild = True
+            except:
+                rebuild = True
+                
+        if rebuild:
             try:
                 import sys
                 project_root = os.path.dirname(os.path.abspath(__file__))
                 if project_root not in sys.path:
                     sys.path.insert(0, project_root)
                 from scratch.build_precinct_crosswalk import build_canonical_crosswalk
-                build_canonical_crosswalk()
+                build_canonical_crosswalk(reg_pdf_path, voting_pdf_path, crosswalk_path)
             except Exception as e:
                 print(f"Self-healing crosswalk build failed: {e}")
 
@@ -611,7 +681,7 @@ def run_enrichment_calculations(base_scored_df, contest_df, contest_prec_col, co
             enrich_confidences.append("high")
             prec_sources.append(os.path.basename(contest_file_path) if contest_file_path else "detail.csv")
             prec_assigned.append(voting_p)
-            cross_src_files.append("ewmr010_regabsvotpctxref_2026-06-02.pdf / ewmr008_votabsregpctxref_2026-06-02.pdf")
+            cross_src_files.append(f"{os.path.basename(reg_pdf_path)} / {os.path.basename(voting_pdf_path)}" if (reg_pdf_path and voting_pdf_path) else "ewmr010_regabsvotpctxref_2026-06-02.pdf / ewmr008_votabsregpctxref_2026-06-02.pdf")
             cross_otm_flags.append(str(xref_row.get("One_To_Many_Flag", "NO")))
         else:
             # Fall back to exact padded match

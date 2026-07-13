@@ -266,6 +266,71 @@ def build_output_manifest(run_context=None):
             "required_or_optional": "optional",
             "category": "5. Diagnostic Files",
             "description": "Detailed file path trace mapping pipeline dependencies."
+        },
+        # 6. Contest Signal Model Outputs
+        {
+            "label": "Current Campaign Profile JSON",
+            "file_path": "outputs/contest_signal_model/current_campaign_profile.json",
+            "file_type": ".json",
+            "required_or_optional": "optional",
+            "category": "6. Contest Signal Model Outputs",
+            "description": "JSON database containing the target candidate, cause, and campaign metadata."
+        },
+        {
+            "label": "Contest Library JSON",
+            "file_path": "outputs/contest_signal_model/contest_library.json",
+            "file_type": ".json",
+            "required_or_optional": "optional",
+            "category": "6. Contest Signal Model Outputs",
+            "description": "Historical contest data library tracking files, scopes, and weights."
+        },
+        {
+            "label": "Contest Column Classification Matrix CSV",
+            "file_path": "outputs/contest_signal_model/contest_column_classification_matrix.csv",
+            "file_type": ".csv",
+            "required_or_optional": "optional",
+            "category": "6. Contest Signal Model Outputs",
+            "description": "Precinct-level historical column classification indicator mappings."
+        },
+        {
+            "label": "Precinct Contest Signal Matrix CSV",
+            "file_path": "outputs/contest_signal_model/precinct_contest_signal_matrix.csv",
+            "file_type": ".csv",
+            "required_or_optional": "optional",
+            "category": "6. Contest Signal Model Outputs",
+            "description": "Calculated rate and vote counts per precinct for all contests."
+        },
+        {
+            "label": "Aggregate Precinct Signal Scores CSV",
+            "file_path": "outputs/contest_signal_model/aggregate_precinct_signal_scores.csv",
+            "file_type": ".csv",
+            "required_or_optional": "optional",
+            "category": "6. Contest Signal Model Outputs",
+            "description": "Averaged support, opposition, margin, and turnout signal scores."
+        },
+        {
+            "label": "Preview Multi-Contest Priority Scores CSV",
+            "file_path": "outputs/contest_signal_model/preview_multi_contest_priority_scores.csv",
+            "file_type": ".csv",
+            "required_or_optional": "optional",
+            "category": "6. Contest Signal Model Outputs",
+            "description": "Preview precinct priority scores, rankings, rank changes, and strategic planning buckets."
+        },
+        {
+            "label": "Contest Signal Correlation Matrix CSV",
+            "file_path": "outputs/contest_signal_model/contest_signal_correlation_matrix.csv",
+            "file_type": ".csv",
+            "required_or_optional": "optional",
+            "category": "6. Contest Signal Model Outputs",
+            "description": "Pearson correlation statistics comparing contest indicators across precincts."
+        },
+        {
+            "label": "Contest Signal Validation Report MD",
+            "file_path": "outputs/contest_signal_model/contest_signal_validation_report.md",
+            "file_type": ".md",
+            "required_or_optional": "optional",
+            "category": "6. Contest Signal Model Outputs",
+            "description": "Markdown validation diagnostic summary."
         }
     ]
     
@@ -329,7 +394,8 @@ def render_download_panel(manifest, run_context=None):
         "2. Top 50 and Explainability",
         "3. Validation Reports",
         "4. Crosswalk Files",
-        "5. Diagnostic Files"
+        "5. Diagnostic Files",
+        "6. Contest Signal Model Outputs"
     ]
     
     for category in categories:
@@ -675,13 +741,14 @@ if status['is_mock_dist_present']:
 st.markdown('</div>', unsafe_allow_html=True)
 
 # --- TABS ---
-tab_file, tab1, tab2, tab3, tab4, tab5 = st.tabs([
+tab_file, tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
     "📂 Central File Manager",
     "📁 1. Core Data Upload", 
     "🏙️ 2. City Mapping Manager (Optional)", 
     "🗺️ 3. District Mapping Manager (Optional)", 
     "📊 4. Contest Data Manager (Required for Production)",
-    "🚀 5. Execution & Results"
+    "🚀 5. Execution & Results",
+    "📈 6. Contest Signal Manager"
 ])
 
 # --- CENTRAL FILE MANAGER TAB ---
@@ -691,16 +758,18 @@ with tab_file:
     
     # 1. File Upload Section
     st.subheader("📤 Add Files")
-    uploaded_files = st.file_uploader("Upload CSV, TSV, or ZIP shapefiles", accept_multiple_files=True, key="fm_uploader", label_visibility="collapsed")
+    uploaded_files = st.file_uploader("Upload CSV, TSV, PDF, or ZIP shapefiles", accept_multiple_files=True, key="fm_uploader", label_visibility="collapsed")
     if uploaded_files:
-        for uf in uploaded_files:
-            dest = os.path.join("data", uf.name)
-            if not os.path.exists(dest):
-                with open(dest, "wb") as f:
-                    f.write(uf.getbuffer())
-        file_manager.sync_metadata_with_disk()
-        st.success("Files uploaded successfully!")
-        st.rerun()
+        has_new = any(not os.path.exists(os.path.join("data", uf.name)) for uf in uploaded_files)
+        if has_new:
+            for uf in uploaded_files:
+                dest = os.path.join("data", uf.name)
+                if not os.path.exists(dest):
+                    with open(dest, "wb") as f:
+                        f.write(uf.getbuffer())
+            file_manager.sync_metadata_with_disk()
+            st.success("Files uploaded successfully!")
+            st.rerun()
         
     st.markdown("---")
     
@@ -1124,16 +1193,18 @@ with tab4:
     
     c_up = st.file_uploader("Upload Contest/Results File (.csv, .tsv, .xlsx, .xls)", type=['csv', 'tsv', 'xlsx', 'xls'])
     if c_up:
-        for ext in ['.csv', '.tsv', '.xlsx', '.xls']:
-            p = f"data/contest_data_input{ext}"
-            if os.path.exists(p):
-                os.remove(p)
-                
-        ext = os.path.splitext(c_up.name)[1].lower()
-        new_path = f"data/contest_data_input{ext}"
-        with open(new_path, "wb") as f:
-            f.write(c_up.getbuffer())
-        st.rerun()
+        if st.session_state.get("last_processed_contest_upload") != c_up.name:
+            for ext in ['.csv', '.tsv', '.xlsx', '.xls']:
+                p = f"data/contest_data_input{ext}"
+                if os.path.exists(p):
+                    os.remove(p)
+                    
+            ext = os.path.splitext(c_up.name)[1].lower()
+            new_path = f"data/contest_data_input{ext}"
+            with open(new_path, "wb") as f:
+                f.write(c_up.getbuffer())
+            st.session_state["last_processed_contest_upload"] = c_up.name
+            st.rerun()
         
     st.markdown("**OR Load directly from local absolute path:**")
     local_path = st.text_input("Paste absolute file path (e.g. D:\\Downloads\\November 4, 2025.xls)", key="contest_local_path")
@@ -1431,6 +1502,17 @@ with tab4:
                 tot_col = st.selectbox("Total votes column (for Initiative/Baseline type)", ["None"] + num_cols, key="wizard_tot_col")
                 reg_col = st.selectbox("Registered Voters column (for Turnout type)", ["None"] + num_cols, key="wizard_reg_col")
                 
+                c_cross = st.checkbox("Uses Official Sonoma Crosswalk", value=False, key="wizard_uses_crosswalk")
+                c_reg_pdf_val = ""
+                c_voting_pdf_val = ""
+                if c_cross:
+                    metadata_fm = file_manager.load_file_metadata()
+                    pdf_files = [f for f in metadata_fm.keys() if f.lower().endswith(".pdf")]
+                    c_reg_pdf = st.selectbox("Select Regular-to-Voting Crosswalk PDF (e.g. ewmr010)", ["None"] + pdf_files, key="wizard_reg_pdf")
+                    c_voting_pdf = st.selectbox("Select Voting-to-Regular Crosswalk PDF (e.g. ewmr008)", ["None"] + pdf_files, key="wizard_voting_pdf")
+                    c_reg_pdf_val = "" if c_reg_pdf == "None" else os.path.join("data", c_reg_pdf)
+                    c_voting_pdf_val = "" if c_voting_pdf == "None" else os.path.join("data", c_voting_pdf)
+                
                 if st.button("➕ Add Contest to Scoring Model", key="wizard_submit"):
                     if c_name:
                         c_def = {
@@ -1447,7 +1529,10 @@ with tab4:
                             "scope_value": str(scope_value),
                             "scope_confidence": "user_confirmed",
                             "scope_source": "contest_classification_wizard",
-                            "scope_user_confirmed": True
+                            "scope_user_confirmed": True,
+                            "uses_official_crosswalk": c_cross,
+                            "crosswalk_reg_to_voting_file": c_reg_pdf_val,
+                            "crosswalk_voting_to_reg_file": c_voting_pdf_val
                         }
                         if c_type == "Candidate":
                             c_def["opposition_col"] = opp_col
@@ -1894,6 +1979,437 @@ with tab5:
                 if os.path.exists(cw_summary_path):
                     with open(cw_summary_path, "r", encoding="utf-8") as f:
                         st.markdown(f.read())
+
+# --- CONTEST SIGNAL MANAGER TAB ---
+with tab6:
+    st.markdown("### 📈 6. Contest Signal Manager")
+    st.markdown("Build, validate, and preview multi-contest signal models for precinct-level targeting.")
+    
+    # 1. Campaign Profile Panel
+    st.subheader("👤 Current Campaign Profile")
+    
+    profile_path = "outputs/contest_signal_model/current_campaign_profile.json"
+    campaign_profile = {}
+    if os.path.exists(profile_path):
+        try:
+            with open(profile_path, "r", encoding="utf-8") as f:
+                campaign_profile = json.load(f)
+        except:
+            pass
+            
+    campaign_name = st.text_input("Campaign Name", value=campaign_profile.get("campaign_name", "My Campaign"))
+    current_contest_name = st.text_input("Current Contest Name", value=campaign_profile.get("current_contest_name", "My Contest"))
+    supported_side = st.text_input("Supported Candidate/Cause/Side", value=campaign_profile.get("supported_side", ""))
+    opposed_side = st.text_input("Opposed Candidate/Cause/Side (Optional)", value=campaign_profile.get("opposed_side", ""))
+    
+    contest_type_opts = [
+        "Candidate race", "Ballot measure", "Turnout result", "Party baseline", "Issue alignment",
+        "Local candidate performance", "Statewide candidate performance", "Federal candidate performance",
+        "Environmental issue contest", "Labor issue contest", "Housing issue contest",
+        "Tax/revenue issue contest", "Public safety issue contest", "Custom"
+    ]
+    def_type_idx = contest_type_opts.index(campaign_profile.get("contest_type")) if campaign_profile.get("contest_type") in contest_type_opts else 0
+    contest_type = st.selectbox("Contest Type", contest_type_opts, index=def_type_idx)
+    
+    election_date = st.text_input("Election Date", value=campaign_profile.get("election_date", ""))
+    selected_geography = st.text_input("Selected Geography Name", value=campaign_profile.get("selected_geography", ""))
+    
+    scope_type_opts = ["countywide", "supervisorial_district", "assembly_district", "city", "other"]
+    def_scope_idx = scope_type_opts.index(campaign_profile.get("selected_scope_type")) if campaign_profile.get("selected_scope_type") in scope_type_opts else 0
+    selected_scope_type = st.selectbox("Scope Type", scope_type_opts, index=def_scope_idx)
+    selected_scope_value = st.text_input("Scope Value (e.g. 4 for SD4)", value=campaign_profile.get("selected_scope_value", ""))
+    
+    goal_opts = ["Elect candidate", "Defeat candidate", "Pass ballot measure", "Defeat ballot measure", "Turnout operation", "Persuasion operation", "Research / exploratory"]
+    def_goal_idx = goal_opts.index(campaign_profile.get("primary_campaign_goal")) if campaign_profile.get("primary_campaign_goal") in goal_opts else 0
+    primary_campaign_goal = st.selectbox("Primary Campaign Goal", goal_opts, index=def_goal_idx)
+    
+    if st.button("💾 Save Campaign Profile"):
+        os.makedirs("outputs/contest_signal_model", exist_ok=True)
+        campaign_profile = {
+            "campaign_name": campaign_name,
+            "current_contest_name": current_contest_name,
+            "supported_side": supported_side,
+            "opposed_side": opposed_side,
+            "contest_type": contest_type,
+            "election_date": election_date,
+            "selected_geography": selected_geography,
+            "selected_scope_type": selected_scope_type,
+            "selected_scope_value": selected_scope_value,
+            "primary_campaign_goal": primary_campaign_goal,
+            "created_timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        }
+        with open(profile_path, "w", encoding="utf-8") as f:
+            json.dump(campaign_profile, f, indent=2)
+        st.success("Campaign Profile Saved!")
+        st.rerun()
+        
+    st.markdown("---")
+    
+    # 2. Contest Library Selection & Management Panel
+    st.subheader("📚 Contest Library")
+    library_path = "outputs/contest_signal_model/contest_library.json"
+    contest_library = []
+    if os.path.exists(library_path):
+        try:
+            with open(library_path, "r", encoding="utf-8") as f:
+                contest_library = json.load(f)
+        except:
+            pass
+            
+    # List files in data/
+    metadata = file_manager.load_file_metadata()
+    data_files = [f for f in metadata.keys()]
+    
+    if not data_files:
+        st.info("No files found in data folder. Upload files in the Central File Manager first.")
+    else:
+        st.markdown("#### Add Contest to Library")
+        source_file = st.selectbox("Select Contest Source File", [os.path.join("data", f) for f in data_files], key="lib_source_file")
+        
+        selected_sheet = None
+        all_cols = []
+        if source_file:
+            if source_file.lower().endswith((".xlsx", ".xls")):
+                try:
+                    import pandas as pd
+                    xl = pd.ExcelFile(source_file)
+                    sheet_names = xl.sheet_names
+                    
+                    sheet_labels = []
+                    sheet_to_label = {}
+                    label_to_sheet = {}
+                    
+                    import openpyxl
+                    wb = openpyxl.load_workbook(source_file, read_only=True, data_only=True)
+                    for sh_name in sheet_names:
+                        label = sh_name
+                        if sh_name in wb.sheetnames:
+                            sh = wb[sh_name]
+                            first_val = None
+                            for row in sh.iter_rows(max_row=1, max_col=1, values_only=True):
+                                if row:
+                                    first_val = row[0]
+                            if first_val:
+                                label = f"{sh_name} - {str(first_val).strip()}"
+                        sheet_labels.append(label)
+                        sheet_to_label[sh_name] = label
+                        label_to_sheet[label] = sh_name
+                    
+                    selected_label = st.selectbox("Select Sheet/Table", sheet_labels, key="lib_selected_sheet_label")
+                    selected_sheet = label_to_sheet.get(selected_label)
+                except Exception as e:
+                    print(f"Error reading Excel sheet names: {e}")
+                    selected_sheet = None
+            
+            try:
+                import contest_manager
+                res_load = contest_manager.inspect_and_load_file(source_file, sheet_name=selected_sheet)
+                if res_load["status"] == "success":
+                    all_cols = list(res_load["df"].columns)
+            except Exception as e:
+                print(f"Error loading file columns: {e}")
+        
+        c_id = st.text_input("Unique Contest ID", value="contest_" + str(len(contest_library) + 1))
+        c_name = st.text_input("Contest Name (display name)", value="")
+        c_date = st.text_input("Contest Election Date (YYYY-MM-DD)", value="")
+        c_year = st.text_input("Contest Election Year", value="")
+        
+        c_type = st.selectbox("Contest Classification Type", contest_type_opts, key="lib_contest_type")
+        c_scope = st.selectbox("Contest Scope Type", scope_type_opts, key="lib_scope_type")
+        c_scope_field = st.text_input("Contest Scope Field (e.g. sd or city)", value="")
+        c_scope_value = st.text_input("Contest Scope Value (e.g. 4 or SANTA ROSA)", value="")
+        
+        def_prec_idx = 0
+        prec_opts = ["Precinct"] + all_cols if all_cols else ["Precinct"]
+        if all_cols:
+            for p_c in ["Precinct", "PREC", "PrecinctName", "PREC_JOIN"]:
+                if p_c in all_cols:
+                    def_prec_idx = prec_opts.index(p_c)
+                    break
+        c_prec_col = st.selectbox("Precinct Identifier Column", prec_opts, index=def_prec_idx)
+        
+        c_cross = st.checkbox("Uses Official Sonoma Crosswalk", value=False)
+        c_reg_pdf_val = ""
+        c_voting_pdf_val = ""
+        if c_cross:
+            pdf_files = [f for f in data_files if f.lower().endswith(".pdf")]
+            c_reg_pdf = st.selectbox("Select Regular-to-Voting Crosswalk PDF (e.g. ewmr010)", ["None"] + pdf_files)
+            c_voting_pdf = st.selectbox("Select Voting-to-Regular Crosswalk PDF (e.g. ewmr008)", ["None"] + pdf_files)
+            c_reg_pdf_val = "" if c_reg_pdf == "None" else os.path.join("data", c_reg_pdf)
+            c_voting_pdf_val = "" if c_voting_pdf == "None" else os.path.join("data", c_voting_pdf)
+            
+        c_weight = st.slider("Contest Scoring Weight", 0.0, 5.0, 1.0, 0.1)
+        c_cross_weight_label = st.slider("Contest Confidence Weight", 0.0, 1.0, 1.0, 0.05)
+        c_notes = st.text_input("Contest Notes", value="")
+        
+        def calculate_file_hash(file_path):
+            if not os.path.exists(file_path):
+                return ""
+            hash_sha256 = hashlib.sha256()
+            try:
+                with open(file_path, "rb") as f:
+                    for chunk in iter(lambda: f.read(4096), b""):
+                        hash_sha256.update(chunk)
+                return hash_sha256.hexdigest()
+            except Exception:
+                return ""
+
+        if st.button("➕ Add Contest to Library"):
+            if not c_name:
+                st.error("Contest Name is required.")
+            else:
+                import hashlib
+                h = calculate_file_hash(source_file)
+                new_entry = {
+                    "contest_id": c_id,
+                    "contest_name": c_name,
+                    "election_date": c_date,
+                    "election_year": c_year,
+                    "contest_type": c_type,
+                    "source_file": source_file,
+                    "source_file_hash": h,
+                    "sheet_name": selected_sheet,
+                    "precinct_column": c_prec_col,
+                    "scope_type": c_scope,
+                    "scope_field": c_scope_field,
+                    "scope_value": c_scope_value,
+                    "scope_status": "valid",
+                    "uses_official_crosswalk": c_cross,
+                    "crosswalk_source": "canonical_crosswalk" if c_cross else "",
+                    "crosswalk_reg_to_voting_file": c_reg_pdf_val,
+                    "crosswalk_voting_to_reg_file": c_voting_pdf_val,
+                    "coverage_rate": 100.0,
+                    "enabled": True,
+                    "contest_weight": c_weight,
+                    "confidence_weight": c_cross_weight_label,
+                    "notes": c_notes
+                }
+                contest_library.append(new_entry)
+                os.makedirs("outputs/contest_signal_model", exist_ok=True)
+                with open(library_path, "w", encoding="utf-8") as f:
+                    json.dump(contest_library, f, indent=2)
+                st.success(f"Contest '{c_name}' added to library!")
+                st.rerun()
+
+        # Render library table and allow delete
+        if contest_library:
+            st.markdown("#### Library Contests")
+            lib_df = pd.DataFrame(contest_library)
+            st.dataframe(lib_df[["contest_id", "contest_name", "contest_type", "enabled", "contest_weight"]], use_container_width=True)
+            
+            # Select and Delete
+            to_delete = st.selectbox("Select Contest to Delete", [c["contest_id"] for c in contest_library])
+            if st.button("🗑️ Delete Selected Contest"):
+                contest_library = [c for c in contest_library if c["contest_id"] != to_delete]
+                with open(library_path, "w", encoding="utf-8") as f:
+                    json.dump(contest_library, f, indent=2)
+                st.success(f"Deleted contest {to_delete}!")
+                st.rerun()
+
+    st.markdown("---")
+    
+    # 3. Column Classification Table Panel
+    st.subheader("📊 Column Classification Matrix")
+    matrix_path = "outputs/contest_signal_model/contest_column_classification_matrix.csv"
+    matrix_df = pd.DataFrame()
+    if os.path.exists(matrix_path):
+        try:
+            matrix_df = pd.read_csv(matrix_path)
+        except:
+            pass
+            
+    if not contest_library:
+        st.info("Add a contest to the library first to classify columns.")
+    else:
+        selected_lib_id = st.selectbox("Select Contest to Classify", [c["contest_id"] for c in contest_library])
+        selected_contest = [c for c in contest_library if c["contest_id"] == selected_lib_id][0]
+        
+        # Load contest columns
+        c_src = selected_contest["source_file"]
+        sh_name = selected_contest.get("sheet_name", None)
+        if os.path.exists(c_src):
+            try:
+                import contest_manager
+                res_load = contest_manager.inspect_and_load_file(c_src, sheet_name=sh_name)
+                if res_load["status"] == "success":
+                    all_cols = list(res_load["df"].columns)
+                else:
+                    all_cols = []
+                    st.error(f"Failed to read file: {res_load['message']}")
+            except Exception as e:
+                all_cols = []
+                st.error(f"Failed to read file columns: {e}")
+        else:
+            all_cols = []
+            
+        if all_cols:
+            col_to_edit = st.selectbox("Select Column to Classify", all_cols)
+            
+            # Default values from existing matrix
+            existing_row = {}
+            if not matrix_df.empty:
+                matches = matrix_df[(matrix_df["contest_id"] == selected_lib_id) & (matrix_df["original_column_name"] == col_to_edit)]
+                if not matches.empty:
+                    existing_row = matches.iloc[0].to_dict()
+                    
+            sig_types = ["support", "opposition", "turnout", "persuasion", "issue_alignment", "partisan_baseline", "total_votes", "registered_voters", "denominator", "ignore", "unknown"]
+            def_sig_idx = sig_types.index(existing_row.get("mapped_signal_type")) if existing_row.get("mapped_signal_type") in sig_types else 10
+            mapped_signal_type = st.selectbox("Signal Type", sig_types, index=def_sig_idx)
+            
+            mapped_side = st.text_input("Mapped Side Name", value=existing_row.get("mapped_side", ""))
+            
+            relationships = ["supports_current_campaign", "opposes_current_campaign", "neutral_reference", "turnout_only", "issue_similarity", "ignore", "unknown"]
+            def_rel_idx = relationships.index(existing_row.get("current_campaign_relationship")) if existing_row.get("current_campaign_relationship") in relationships else 6
+            current_campaign_relationship = st.selectbox("Campaign Relationship", relationships, index=def_rel_idx)
+            
+            directions = ["higher_supports_current_campaign", "higher_opposes_current_campaign", "higher_indicates_turnout", "higher_indicates_persuasion_opportunity", "reference_only", "ignore"]
+            def_dir_idx = directions.index(existing_row.get("directionality")) if existing_row.get("directionality") in directions else 4
+            directionality = st.selectbox("Directionality", directions, index=def_dir_idx)
+            
+            denom_column = st.selectbox("Denominator Column", ["None"] + all_cols, index=(all_cols.index(existing_row.get("denominator_column")) + 1 if existing_row.get("denominator_column") in all_cols else 0))
+            denom_type = st.text_input("Denominator Type Label", value=existing_row.get("denominator_type", ""))
+            
+            include_in_scoring = st.checkbox("Include in Scoring", value=existing_row.get("include_in_scoring", True))
+            signal_weight = st.number_input("Signal Weight", value=float(existing_row.get("signal_weight", 1.0)))
+            confidence_weight = st.number_input("Confidence Weight", value=float(existing_row.get("confidence_weight", 1.0)))
+            notes = st.text_input("Classification Notes", value=existing_row.get("notes", ""))
+            
+            if st.button("💾 Apply to Column"):
+                # Remove old row if exists
+                if not matrix_df.empty:
+                    matrix_df = matrix_df[~((matrix_df["contest_id"] == selected_lib_id) & (matrix_df["original_column_name"] == col_to_edit))]
+                
+                new_row = {
+                    "contest_id": selected_lib_id,
+                    "contest_name": selected_contest["contest_name"],
+                    "source_file": selected_contest["source_file"],
+                    "original_column_name": col_to_edit,
+                    "normalized_column_name": col_to_edit,
+                    "user_classification": mapped_signal_type,
+                    "mapped_signal_type": mapped_signal_type,
+                    "mapped_side": mapped_side,
+                    "current_campaign_relationship": current_campaign_relationship,
+                    "directionality": directionality,
+                    "include_in_scoring": include_in_scoring,
+                    "signal_weight": signal_weight,
+                    "confidence_weight": confidence_weight,
+                    "denominator_column": "" if denom_column == "None" else denom_column,
+                    "denominator_type": denom_type,
+                    "notes": notes
+                }
+                
+                matrix_df = pd.concat([matrix_df, pd.DataFrame([new_row])], ignore_index=True)
+                os.makedirs("outputs/contest_signal_model", exist_ok=True)
+                matrix_df.to_csv(matrix_path, index=False)
+                st.success(f"Column '{col_to_edit}' classification updated!")
+                st.rerun()
+
+            # Render classified columns table
+            if not matrix_df.empty:
+                c_matrix = matrix_df[matrix_df["contest_id"] == selected_lib_id]
+                if not c_matrix.empty:
+                    st.markdown("#### Classified Columns for Selected Contest")
+                    st.dataframe(c_matrix[["original_column_name", "mapped_signal_type", "current_campaign_relationship", "directionality", "denominator_column", "include_in_scoring"]], use_container_width=True)
+
+    st.markdown("---")
+    
+    # 4. Preview Validation & Scoring Panel
+    st.subheader("🚀 Validation & Preview Scoring")
+    if not os.path.exists(profile_path) or not os.path.exists(library_path) or not os.path.exists(matrix_path):
+        st.info("Configure campaign profile, library, and classifications to execute validation.")
+    else:
+        if st.button("⚡ Run Contest Signal Preview"):
+            try:
+                import contest_signal_model
+                
+                # Load profile, library, classification
+                with open(profile_path, "r", encoding="utf-8") as f:
+                    campaign_profile = json.load(f)
+                with open(library_path, "r", encoding="utf-8") as f:
+                    contest_library = json.load(f)
+                matrix_df = pd.read_csv(matrix_path)
+                
+                # Load baseline production priority precincts
+                prod_path = "outputs/final_rankings/production_priority_precincts.csv"
+                if not os.path.exists(prod_path):
+                    # Fall back to run pipeline without contest file to generate base structure
+                    st.info("Production priorities not found. Running baseline pipeline...")
+                    result = run_pipeline(
+                        weights={'turnout_gap': 0.4, 'competitive_index': 0.4, 'density': 0.2},
+                        target_params={'ad': None, 'sd': 4, 'city': None},
+                        run_mode="PRODUCTION_MODE",
+                        trigger_source="streamlit_ui"
+                    )
+                
+                production_df = pd.read_csv(prod_path)
+                
+                # Execute math engine
+                prec_signals_df = contest_signal_model.calculate_precinct_contest_signals(
+                    production_df, contest_library, matrix_df, campaign_profile
+                )
+                
+                agg_df = contest_signal_model.aggregate_precinct_signal_scores(
+                    prec_signals_df, contest_library
+                )
+                
+                preview_df = contest_signal_model.generate_preview_rankings(
+                    production_df, agg_df, campaign_profile
+                )
+                
+                corr_df = contest_signal_model.generate_correlation_matrix(prec_signals_df)
+                
+                # Write outputs
+                os.makedirs("outputs/contest_signal_model", exist_ok=True)
+                prec_signals_df.to_csv("outputs/contest_signal_model/precinct_contest_signal_matrix.csv", index=False)
+                agg_df.to_csv("outputs/contest_signal_model/aggregate_precinct_signal_scores.csv", index=False)
+                preview_df.to_csv("outputs/contest_signal_model/preview_multi_contest_priority_scores.csv", index=False)
+                corr_df.to_csv("outputs/contest_signal_model/contest_signal_correlation_matrix.csv", index=False)
+                
+                validation_md = contest_signal_model.generate_contest_signal_validation_report(
+                    contest_library, matrix_df, prec_signals_df, campaign_profile
+                )
+                with open("outputs/contest_signal_model/contest_signal_validation_report.md", "w", encoding="utf-8") as f:
+                    f.write(validation_md)
+                    
+                st.success("⚡ Preview Calculation Complete!")
+                st.session_state["contest_signal_preview_run"] = True
+                st.session_state["latest_output_manifest"] = build_output_manifest(st.session_state.get("latest_run_context"))
+                st.rerun()
+            except Exception as e:
+                st.error(f"Preview run failed: {e}")
+                import traceback
+                st.code(traceback.format_exc())
+
+        # Render preview calculations if exists
+        preview_scores_path = "outputs/contest_signal_model/preview_multi_contest_priority_scores.csv"
+        if os.path.exists(preview_scores_path):
+            st.markdown("### 🏆 Preview Rankings (Top 25)")
+            prev_df = pd.read_csv(preview_scores_path)
+            st.dataframe(prev_df.sort_values("Preview_Rank").head(25), use_container_width=True)
+            
+            # Scatter plot of Support vs Turnout
+            st.markdown("### 📊 Targeting Distribution Analyses")
+            st.scatter_chart(
+                prev_df,
+                x="Preview_MultiContest_Support_Score",
+                y="Preview_MultiContest_Turnout_Score",
+                color="Strategic_Bucket",
+                size="Preview_MultiContest_Composite_Score"
+            )
+            
+            # Correlation Matrix Render
+            corr_path = "outputs/contest_signal_model/contest_signal_correlation_matrix.csv"
+            if os.path.exists(corr_path):
+                st.markdown("### 🧬 Historical Contest Correlation Matrix")
+                corr_df = pd.read_csv(corr_path)
+                st.dataframe(corr_df, use_container_width=True)
+                
+            # Validation summary report Markdown
+            val_report_path = "outputs/contest_signal_model/contest_signal_validation_report.md"
+            if os.path.exists(val_report_path):
+                st.markdown("### 📋 Contest Signal Validation Diagnostic Summary")
+                with open(val_report_path, "r", encoding="utf-8") as f:
+                    st.markdown(f.read())
 
 
 

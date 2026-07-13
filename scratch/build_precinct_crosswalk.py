@@ -84,15 +84,22 @@ def parse_pdf(path, name):
                     })
     return pd.DataFrame(rows)
 
-def build_canonical_crosswalk():
+def build_canonical_crosswalk(reg_to_voting_path=None, voting_to_reg_path=None, output_path=None):
     os.makedirs("outputs/precinct_crosswalk", exist_ok=True)
     
-    print("Parsing Regular to Voting PDF (ewmr010)...")
-    df_reg_to_voting = parse_pdf(r"D:\Downloads\ewmr010_regabsvotpctxref_2026-06-02.pdf", "ewmr010_regabsvotpctxref_2026-06-02.pdf")
+    if not reg_to_voting_path:
+        reg_to_voting_path = os.path.expanduser(r"~\Downloads\ewmr010_regabsvotpctxref_2026-06-02.pdf")
+    if not voting_to_reg_path:
+        voting_to_reg_path = os.path.expanduser(r"~\Downloads\ewmr008_votabsregpctxref_2026-06-02.pdf")
+    if not output_path:
+        output_path = r"outputs\precinct_crosswalk\canonical_sov_to_voter_precinct_crosswalk.csv"
+        
+    print(f"Parsing Regular to Voting PDF ({os.path.basename(reg_to_voting_path)})...")
+    df_reg_to_voting = parse_pdf(reg_to_voting_path, os.path.basename(reg_to_voting_path))
     df_reg_to_voting.to_csv(r"outputs\precinct_crosswalk\parsed_regular_vbm_voting_xref.csv", index=False)
     
-    print("Parsing Voting to Regular PDF (ewmr008)...")
-    df_voting_to_reg = parse_pdf(r"D:\Downloads\ewmr008_votabsregpctxref_2026-06-02.pdf", "ewmr008_votabsregpctxref_2026-06-02.pdf")
+    print(f"Parsing Voting to Regular PDF ({os.path.basename(voting_to_reg_path)})...")
+    df_voting_to_reg = parse_pdf(voting_to_reg_path, os.path.basename(voting_to_reg_path))
     df_voting_to_reg.to_csv(r"outputs\precinct_crosswalk\parsed_voting_vbm_regular_xref.csv", index=False)
     
     print("Parsing complete. Row counts:", len(df_reg_to_voting), len(df_voting_to_reg))
@@ -196,8 +203,8 @@ def build_canonical_crosswalk():
         })
         
     df_canonical = pd.DataFrame(canonical_rows)
-    df_canonical.to_csv(r"outputs\precinct_crosswalk\canonical_sov_to_voter_precinct_crosswalk.csv", index=False)
-    print("Canonical crosswalk saved to outputs/precinct_crosswalk/canonical_sov_to_voter_precinct_crosswalk.csv")
+    df_canonical.to_csv(output_path, index=False)
+    print(f"Canonical crosswalk saved to {output_path}")
     print("Valid for production count:", len(df_canonical[df_canonical["Valid_For_Production"] == "TRUE"]))
 
 if __name__ == "__main__":
