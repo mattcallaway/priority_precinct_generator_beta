@@ -60,6 +60,21 @@ def get_file_mime_type(path):
     }
     return mime_types.get(ext, 'application/octet-stream')
 
+def check_csm_has_fixtures():
+    lib_path = "outputs/contest_signal_model/contest_library.json"
+    if os.path.exists(lib_path):
+        try:
+            with open(lib_path, "r", encoding="utf-8") as f:
+                lib = json.load(f)
+                if isinstance(lib, list):
+                    for c in lib:
+                        src = c.get("source_file", "")
+                        if src and ("tests/" in src or "fixtures/" in src or "mock" in src.lower()):
+                            return True
+        except:
+            pass
+    return False
+
 def build_output_manifest(run_context=None):
     candidates = [
         # 1. Main Campaign Outputs
@@ -177,6 +192,14 @@ def build_output_manifest(run_context=None):
             "required_or_optional": "optional",
             "category": "4. Crosswalk Files",
             "description": "Parsed voting precinct to VBM/regular precinct crosswalk log."
+        },
+        {
+            "label": "Crosswalk Self-Healing Log",
+            "file_path": "outputs/precinct_crosswalk/crosswalk_self_healing_log.json",
+            "file_type": ".json",
+            "required_or_optional": "optional",
+            "category": "4. Crosswalk Files",
+            "description": "JSON audit log documenting self-healing recovery actions for the precinct crosswalk."
         },
         # 5. Diagnostic Files
         {
@@ -334,12 +357,25 @@ def build_output_manifest(run_context=None):
         }
     ]
     
+    csm_has_fixtures = check_csm_has_fixtures()
+    is_test = (os.environ.get("PPG_RUN_MODE") == "TEST_MODE")
+    if run_context:
+        if run_context.get("is_test_harness") or run_context.get("run_mode") == "TEST_MODE":
+            is_test = True
+            
     manifest = []
     for item in candidates:
         path = item["file_path"]
         exists = os.path.exists(path)
         item["exists"] = exists
         item["size_bytes"] = os.path.getsize(path) if exists else None
+        
+        # Rule 9: Quarantine / Label CSM fixtures in non-test mode
+        if item["category"] == "6. Contest Signal Model Outputs" and csm_has_fixtures and not is_test:
+            item["label"] = f"⚠️ [MOCK FIXTURE] {item['label']}"
+            item["description"] = f"[MOCK/TEST FIXTURE - NOT FOR FIELD USE] {item['description']}"
+            item["category"] = "⚠️ Mock/Fixture Outputs (NOT FOR FIELD USE)"
+            
         manifest.append(item)
     return manifest
 
@@ -354,24 +390,106 @@ def create_outputs_zip(manifest, run_context=None):
     files_included = []
     files_missing = []
     
+    csm_has_fixtures = check_csm_has_fixtures()
+    is_test = (os.environ.get("PPG_RUN_MODE") == "TEST_MODE")
+    if run_context:
+        if run_context.get("is_test_harness") or run_context.get("run_mode") == "TEST_MODE":
+            is_test = True
+            
     with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
         for item in manifest:
             src_path = Path(item["file_path"])
             if item["exists"] and src_path.exists():
                 rel_zip_path = src_path.relative_to("outputs")
-                zipf.write(src_path, arcname=rel_zip_path)
-                files_included.append(str(rel_zip_path))
+                
+                # Rule 9: Quarantine under mock_fixtures/ inside the ZIP in non-test mode
+                is_csm_output = ("contest_signal_model" in str(src_path))
+                if is_csm_output and csm_has_fixtures and not is_test:
+                    zip_arcname = Path("mock_fixtures") / rel_zip_path
+                else:
+                    zip_arcname = rel_zip_path
+                    
+                zipf.write(src_path, arcname=zip_arcname)
+                files_included.append(str(zip_arcname).replace("\\", "/"))
             else:
                 files_missing.append(item["file_path"])
                 
+        # Read self healing log if exists
+        self_healing_trigger = "NO"
+        rebuild_source = "none"
+        sh_path = "outputs/precinct_crosswalk/crosswalk_self_healing_log.json"
+        if os.path.exists(sh_path):
+            try:
+                with open(sh_path, "r", encoding="utf-8") as sh_f:
+                    sh_data = json.load(sh_f)
+                    self_healing_trigger = sh_data.get("Crosswalk_Self_Healing_Triggered", "NO")
+                    rebuild_source = sh_data.get("Crosswalk_Rebuild_Source", "none")
+            except:
+                pass
+                
+        active_xref_files = []
+        parsed_reg = "outputs/precinct_crosswalk/parsed_regular_vbm_voting_xref.csv"
+        parsed_vot = "outputs/precinct_crosswalk/parsed_voting_vbm_regular_xref.csv"
+        if os.path.exists(parsed_reg):
+            active_xref_files.append(parsed_reg)
+        if os.path.exists(parsed_vot):
+            active_xref_files.append(parsed_vot)
+            
+        canonical_file_val = ""
+        canonical_path = "outputs/precinct_crosswalk/canonical_sov_to_voter_precinct_crosswalk.csv"
+        if os.path.exists(canonical_path):
+            canonical_file_val = canonical_path
+            
+        # Check manifest completeness
+        manifest_complete = True
+        
+        # 1. Required files check
+        for item in manifest:
+            if item["required_or_optional"] == "required" and not item["exists"]:
+                manifest_complete = False
+                
+        # 2. Used crosswalk check
+        used_crosswalk = False
+        verdict_val = "unknown"
+        if run_context:
+            verdict_val = run_context.get("verdict", "")
+            if not verdict_val:
+                verdict_val = run_context.get("readiness_verdict", "unknown")
+        if verdict_val in ["PRODUCTION_READY_WITH_INHERITED_CONTEST_SIGNALS", "SOV_TO_VOTER_PRECINCT_BRIDGE_INSUFFICIENT_COVERAGE", "READINESS_CONTRADICTION_DETECTED"]:
+            used_crosswalk = True
+            
+        canonical_in_zip = any("canonical_sov_to_voter_precinct_crosswalk.csv" in f for f in files_included)
+        if used_crosswalk and not canonical_in_zip:
+            manifest_complete = False
+            
+        # 3. Contest Signal Manager files check
+        has_contest = False
+        if run_context:
+            has_contest = run_context.get("has_contest", False)
+        else:
+            has_contest = os.path.exists("outputs/contest_signal_model/contest_library.json")
+            
+        if has_contest:
+            for item in manifest:
+                is_csm = (item["category"] == "6. Contest Signal Model Outputs" or 
+                          "mock_fixtures" in item["file_path"] or 
+                          "contest_signal_model" in item["file_path"] or
+                          "Contest Signal Model Outputs" in str(item.get("category", "")))
+                if is_csm and not item["exists"]:
+                    manifest_complete = False
+            
         # Generate download_manifest.json
         manifest_data = {
             "generated_timestamp": datetime.now().isoformat(),
             "run_mode": run_context.get("run_mode", "USER_DASHBOARD_MODE") if run_context else "USER_DASHBOARD_MODE",
             "active_voter_file": run_context.get("active_voter_file", "data/voter_file.csv") if run_context else "data/voter_file.csv",
             "active_contest_file": run_context.get("active_contest_file", "") if run_context else "",
-            "active_cross_reference_files": run_context.get("active_cross_reference_files", []) if run_context else [],
-            "readiness_verdict": run_context.get("readiness_verdict", "unknown") if run_context else "unknown",
+            "active_cross_reference_files": active_xref_files,
+            "canonical_crosswalk_file": canonical_file_val,
+            "crosswalk_rebuild_source": rebuild_source,
+            "crosswalk_self_healing_triggered": self_healing_trigger,
+            "readiness_verdict": verdict_val,
+            "manifest_complete": manifest_complete,
             "files_included": files_included,
             "files_missing": files_missing
         }
@@ -384,6 +502,15 @@ def render_download_panel(manifest, run_context=None):
     st.markdown("---")
     st.markdown("## 📥 Download Center")
     
+    csm_has_fixtures = check_csm_has_fixtures()
+    is_test = (os.environ.get("PPG_RUN_MODE") == "TEST_MODE")
+    if run_context:
+        if run_context.get("is_test_harness") or run_context.get("run_mode") == "TEST_MODE":
+            is_test = True
+            
+    if csm_has_fixtures and not is_test:
+        st.warning("⚠️ **Contest Signal Manager outputs include controlled test fixture contests. These are not campaign data and are not for field use.**")
+        
     existing_items = [item for item in manifest if item["exists"]]
     if not existing_items:
         st.info("No files available for download yet. Run the pipeline to generate outputs.")
@@ -395,7 +522,8 @@ def render_download_panel(manifest, run_context=None):
         "3. Validation Reports",
         "4. Crosswalk Files",
         "5. Diagnostic Files",
-        "6. Contest Signal Model Outputs"
+        "6. Contest Signal Model Outputs",
+        "⚠️ Mock/Fixture Outputs (NOT FOR FIELD USE)"
     ]
     
     for category in categories:

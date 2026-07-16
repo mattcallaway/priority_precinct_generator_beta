@@ -938,7 +938,6 @@ def run_tests():
                 
             except Exception as e:
                 print(f"FAIL: Contest Signal Manager math engine failed: {e}")
-                import traceback
                 traceback.print_exc()
                 failures += 1
 

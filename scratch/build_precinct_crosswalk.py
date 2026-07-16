@@ -84,8 +84,42 @@ def parse_pdf(path, name):
                     })
     return pd.DataFrame(rows)
 
+def get_file_hash(path):
+    import hashlib
+    if not path or not os.path.exists(path):
+        return "none"
+    try:
+        h = hashlib.sha256()
+        with open(path, "rb") as f:
+            for chunk in iter(lambda: f.read(4096), b""):
+                h.update(chunk)
+        return h.hexdigest()
+    except:
+        return "error"
+
+def write_self_healing_log(triggered, source, files, hashes, status, reason=None):
+    import json
+    from datetime import datetime
+    log_path = "outputs/precinct_crosswalk/crosswalk_self_healing_log.json"
+    log_data = {
+        "Crosswalk_Self_Healing_Triggered": triggered,
+        "Crosswalk_Rebuild_Source": source,
+        "Crosswalk_Source_Files": files,
+        "Crosswalk_Source_Hashes": hashes,
+        "Crosswalk_Rebuild_Timestamp": datetime.now().isoformat(),
+        "Crosswalk_Validation_Status": status
+    }
+    if reason:
+        log_data["Failure_Reason"] = reason
+    os.makedirs(os.path.dirname(log_path), exist_ok=True)
+    with open(log_path, "w", encoding="utf-8") as f:
+        json.dump(log_data, f, indent=2)
+
 def build_canonical_crosswalk(reg_to_voting_path=None, voting_to_reg_path=None, output_path=None):
     os.makedirs("outputs/precinct_crosswalk", exist_ok=True)
+    
+    parsed_reg_csv = r"outputs\precinct_crosswalk\parsed_regular_vbm_voting_xref.csv"
+    parsed_vot_csv = r"outputs\precinct_crosswalk\parsed_voting_vbm_regular_xref.csv"
     
     if not reg_to_voting_path:
         reg_to_voting_path = os.path.expanduser(r"~\Downloads\ewmr010_regabsvotpctxref_2026-06-02.pdf")
@@ -94,15 +128,58 @@ def build_canonical_crosswalk(reg_to_voting_path=None, voting_to_reg_path=None, 
     if not output_path:
         output_path = r"outputs\precinct_crosswalk\canonical_sov_to_voter_precinct_crosswalk.csv"
         
-    print(f"Parsing Regular to Voting PDF ({os.path.basename(reg_to_voting_path)})...")
-    df_reg_to_voting = parse_pdf(reg_to_voting_path, os.path.basename(reg_to_voting_path))
-    df_reg_to_voting.to_csv(r"outputs\precinct_crosswalk\parsed_regular_vbm_voting_xref.csv", index=False)
+    pdf_exists = os.path.exists(reg_to_voting_path) and os.path.exists(voting_to_reg_path)
+    use_csv_fallback = not pdf_exists
     
-    print(f"Parsing Voting to Regular PDF ({os.path.basename(voting_to_reg_path)})...")
-    df_voting_to_reg = parse_pdf(voting_to_reg_path, os.path.basename(voting_to_reg_path))
-    df_voting_to_reg.to_csv(r"outputs\precinct_crosswalk\parsed_voting_vbm_regular_xref.csv", index=False)
+    rebuild_source = "raw_pdfs"
+    source_files = []
+    source_hashes = []
     
-    print("Parsing complete. Row counts:", len(df_reg_to_voting), len(df_voting_to_reg))
+    try:
+        if use_csv_fallback:
+            rebuild_source = "parsed_csv_fallback"
+            # Rule 4: Validate pre-parsed CSV fallback before use
+            if not os.path.exists(parsed_reg_csv) or not os.path.exists(parsed_vot_csv):
+                raise ValueError(f"Pre-parsed crosswalk CSV files do not exist.")
+                
+            df_reg_to_voting = pd.read_csv(parsed_reg_csv, dtype=str)
+            df_voting_to_reg = pd.read_csv(parsed_vot_csv, dtype=str)
+            
+            # Required columns exist
+            req_cols = ["Regular_Precinct_Normalized", "Voting_Precinct_Normalized", "VBM_Precinct_Normalized", "Ballot_Type"]
+            if not all(c in df_reg_to_voting.columns for c in req_cols) or not all(c in df_voting_to_reg.columns for c in req_cols):
+                raise ValueError("Required columns are missing from the pre-parsed CSV files.")
+                
+            # Row counts are plausible and non-empty
+            if len(df_reg_to_voting) == 0 or len(df_voting_to_reg) == 0:
+                raise ValueError("Pre-parsed CSV files are empty.")
+                
+            source_files = [os.path.basename(parsed_reg_csv), os.path.basename(parsed_vot_csv)]
+            source_hashes = [get_file_hash(parsed_reg_csv), get_file_hash(parsed_vot_csv)]
+            print(f"PDFs not found. Pre-parsed CSV fallback validated. Row counts: {len(df_reg_to_voting)}, {len(df_voting_to_reg)}")
+        else:
+            rebuild_source = "raw_pdfs"
+            print(f"Parsing Regular to Voting PDF ({os.path.basename(reg_to_voting_path)})...")
+            df_reg_to_voting = parse_pdf(reg_to_voting_path, os.path.basename(reg_to_voting_path))
+            df_reg_to_voting.to_csv(parsed_reg_csv, index=False)
+            
+            print(f"Parsing Voting to Regular PDF ({os.path.basename(voting_to_reg_path)})...")
+            df_voting_to_reg = parse_pdf(voting_to_reg_path, os.path.basename(voting_to_reg_path))
+            df_voting_to_reg.to_csv(parsed_vot_csv, index=False)
+            
+            source_files = [os.path.basename(reg_to_voting_path), os.path.basename(voting_to_reg_path)]
+            source_hashes = [get_file_hash(reg_to_voting_path), get_file_hash(voting_to_reg_path)]
+            
+    except Exception as e:
+        write_self_healing_log(
+            triggered="YES",
+            source="failed",
+            files=source_files,
+            hashes=source_hashes,
+            status="FAIL",
+            reason=str(e)
+        )
+        raise e
     
     # Load SOV to verify presence
     print("Loading SOV detail.csv...")
@@ -204,6 +281,16 @@ def build_canonical_crosswalk(reg_to_voting_path=None, voting_to_reg_path=None, 
         
     df_canonical = pd.DataFrame(canonical_rows)
     df_canonical.to_csv(output_path, index=False)
+    
+    # Write success log
+    write_self_healing_log(
+        triggered="YES",
+        source=rebuild_source,
+        files=source_files,
+        hashes=source_hashes,
+        status="PASS"
+    )
+    
     print(f"Canonical crosswalk saved to {output_path}")
     print("Valid for production count:", len(df_canonical[df_canonical["Valid_For_Production"] == "TRUE"]))
 

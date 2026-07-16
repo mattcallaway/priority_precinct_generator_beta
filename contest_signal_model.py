@@ -99,14 +99,31 @@ def calculate_precinct_contest_signals(
                 elif os.path.exists(os.path.join("data", os.path.basename(voting_pdf))):
                     voting_pdf_path = os.path.join("data", os.path.basename(voting_pdf))
                     
-            if reg_pdf_path and voting_pdf_path:
-                contest_cw_path = f"outputs/precinct_crosswalk/canonical_sov_to_voter_precinct_crosswalk_{contest_id}.csv"
-                if not os.path.exists(contest_cw_path):
-                    try:
-                        from scratch.build_precinct_crosswalk import build_canonical_crosswalk
+            if not reg_pdf_path:
+                default_reg = os.path.expanduser(r"~\Downloads\ewmr010_regabsvotpctxref_2026-06-02.pdf")
+                if os.path.exists(default_reg):
+                    reg_pdf_path = default_reg
+            if not voting_pdf_path:
+                default_voting = os.path.expanduser(r"~\Downloads\ewmr008_votabsregpctxref_2026-06-02.pdf")
+                if os.path.exists(default_voting):
+                    voting_pdf_path = default_voting
+                    
+            parsed_reg_csv = "outputs/precinct_crosswalk/parsed_regular_vbm_voting_xref.csv"
+            parsed_vot_csv = "outputs/precinct_crosswalk/parsed_voting_vbm_regular_xref.csv"
+            has_parsed_csvs = os.path.exists(parsed_reg_csv) and os.path.exists(parsed_vot_csv)
+            
+            contest_cw_path = f"outputs/precinct_crosswalk/canonical_sov_to_voter_precinct_crosswalk_{contest_id}.csv"
+            rebuild = not os.path.exists(contest_cw_path)
+            
+            if rebuild and ((reg_pdf_path and voting_pdf_path) or has_parsed_csvs):
+                try:
+                    from scratch.build_precinct_crosswalk import build_canonical_crosswalk
+                    if reg_pdf_path and voting_pdf_path:
                         build_canonical_crosswalk(reg_pdf_path, voting_pdf_path, contest_cw_path)
-                    except Exception as e:
-                        print(f"Error building custom crosswalk: {e}")
+                    else:
+                        build_canonical_crosswalk(output_path=contest_cw_path)
+                except Exception as e:
+                    print(f"Error building custom crosswalk: {e}")
                 
                 if os.path.exists(contest_cw_path):
                     try:

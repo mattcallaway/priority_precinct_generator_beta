@@ -601,9 +601,14 @@ def run_enrichment_calculations(base_scored_df, contest_df, contest_prec_col, co
         if os.path.exists(default_voting):
             voting_pdf_path = default_voting
             
-    if reg_pdf_path and voting_pdf_path and os.environ.get("DISABLE_SELF_HEALING_CROSSWALK") != "TRUE":
+    # Resolve pre-parsed CSV files
+    parsed_reg_csv = "outputs/precinct_crosswalk/parsed_regular_vbm_voting_xref.csv"
+    parsed_vot_csv = "outputs/precinct_crosswalk/parsed_voting_vbm_regular_xref.csv"
+    has_parsed_csvs = os.path.exists(parsed_reg_csv) and os.path.exists(parsed_vot_csv)
+    
+    if os.environ.get("DISABLE_SELF_HEALING_CROSSWALK") != "TRUE":
         rebuild = not os.path.exists(crosswalk_path)
-        if not rebuild:
+        if not rebuild and reg_pdf_path and voting_pdf_path:
             try:
                 out_mtime = os.path.getmtime(crosswalk_path)
                 if os.path.getmtime(reg_pdf_path) > out_mtime or os.path.getmtime(voting_pdf_path) > out_mtime:
@@ -611,14 +616,19 @@ def run_enrichment_calculations(base_scored_df, contest_df, contest_prec_col, co
             except:
                 rebuild = True
                 
-        if rebuild:
+        if rebuild and ((reg_pdf_path and voting_pdf_path) or has_parsed_csvs):
             try:
                 import sys
                 project_root = os.path.dirname(os.path.abspath(__file__))
                 if project_root not in sys.path:
                     sys.path.insert(0, project_root)
                 from scratch.build_precinct_crosswalk import build_canonical_crosswalk
-                build_canonical_crosswalk(reg_pdf_path, voting_pdf_path, crosswalk_path)
+                
+                # If we have PDFs, use them. Otherwise, let build_canonical_crosswalk use fallbacks
+                if reg_pdf_path and voting_pdf_path:
+                    build_canonical_crosswalk(reg_pdf_path, voting_pdf_path, crosswalk_path)
+                else:
+                    build_canonical_crosswalk(output_path=crosswalk_path)
             except Exception as e:
                 print(f"Self-healing crosswalk build failed: {e}")
 
